@@ -1,4 +1,4 @@
-import { createMongoMigrationRunner, type MongoMigrationRunner } from './migrations.ts';
+import { createMongoMigrationRunner, type MongoMigrationRunner } from './migrations/index.ts';
 import type { MongoService, MongoServiceConfig } from './service/index.ts';
 import { createMongoService } from './service/index.ts';
 import type { DbClientsDefinition } from './types.ts';

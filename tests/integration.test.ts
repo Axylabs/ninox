@@ -4,7 +4,7 @@ import { QueryCache } from '../src/cache/query-cache.ts';
 import { createMongoCapabilitiesStore } from '../src/capabilities.ts';
 import { DomainError } from '../src/errors/index.ts';
 import { withGracefulMongoTransaction } from '../src/graceful-transaction.ts';
-import { createMongoMigrationRunner } from '../src/migrations.ts';
+import { createMongoMigrationRunner } from '../src/migrations/index.ts';
 import { belongsTo } from '../src/relation/relation.ts';
 import { type InferDoc, s } from '../src/schema/index.ts';
 import { createMongoService } from '../src/service/index.ts';

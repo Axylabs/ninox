@@ -1,6 +1,6 @@
 import { MongoClient } from 'mongodb';
-import { normalizeMongoUrl } from '../connection-uri.ts';
 import type { DbClientsDefinition } from '../types.ts';
+import { normalizeMongoUrl } from './connection-uri.ts';
 
 export interface CoreConfigLike {
   defaultDb: string;

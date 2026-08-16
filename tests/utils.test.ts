@@ -11,9 +11,9 @@ import { withRetry } from '../src/mongo-helpers.ts';
 import { defineCrudOp } from '../src/service/crud-op.ts';
 import type { DbOpMeta } from '../src/service/trace-db-op.ts';
 import { formatUpdateFilter, hasUpdateOperator } from '../src/service/update-format.ts';
-import { createCachedAsyncFactory, createCachedFactory } from '../src/utils/cache.ts';
 import { stableHash, stableStringify } from '../src/utils/hash.ts';
 import { LRU } from '../src/utils/lru.ts';
+import { createCachedAsyncFactory, createCachedFactory } from '../src/utils/memoize.ts';
 
 describe('LRU', () => {
   test('evicts least-recently-used', () => {

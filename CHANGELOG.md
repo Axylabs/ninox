@@ -4,6 +4,22 @@ All notable changes to `ninox` are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Internal refactor — no API changes.** Source tree reorganized for
+  maintainability: the biggest files were split into same-named folders with
+  barrel re-exports (`crud/`, `hot-cache/`, `validate-doc/`, `pagination/`,
+  `aggregation/`, `errors/`, `migrations/`); the service composition root
+  (`service/index.ts`) was slimmed into `config.ts` / `manager.ts` / `health.ts`;
+  connection helpers moved under `service/`; `utils/cache.ts` renamed to
+  `utils/memoize.ts`; and a shared `op-deps.ts` now dedupes the `{ trace, meta }`
+  boilerplate across op factories. All 216 barrel exports, types, and the dist
+  output are unchanged. `TRANSIENT_MONGO_ERROR_CODES` is now a frozen
+  `ReadonlySet`. Added `scripts/check-api.ts` (`bun run check:api`) to keep the
+  barrel and `API.md` in sync.
+
 ## [0.1.0] — 2026-08-16
 
 ### Added

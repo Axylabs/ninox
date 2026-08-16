@@ -1,4 +1,4 @@
-import type { MigrationContext } from '../../../src/migrations.ts';
+import type { MigrationContext } from '../../../src/migrations/index.ts';
 
 /** Migration fixture used by the integration test's migration runner. */
 export const up = async (ctx: MigrationContext): Promise<void> => {

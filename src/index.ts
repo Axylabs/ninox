@@ -1,7 +1,7 @@
 /**
  * ninox — schema-first MongoDB ORM with DataLoader-batched relations,
  * read-through query caching, in-flight dedup, `$facet` pagination, and a
- * fluent query builder. Architectural reference: `@platform-tooling/sdk-db`.
+ * fluent query builder. Architectural.
  */
 
 export type {
@@ -20,9 +20,6 @@ export { cacheCollectionKey, InFlight, QueryCache } from './cache/index.ts';
 export type { QueryCacheOptions, QueryCacheStats } from './cache/query-cache.ts';
 export type { MongoCapabilities, MongoCapabilitiesStore } from './capabilities.ts';
 export { createMongoCapabilitiesStore, probeMongoCapabilities } from './capabilities.ts';
-export { createResolveCollectionName } from './collection-name.ts';
-/* --------------------------- connection -------------------------------- */
-export { normalizeMongoUrl } from './connection-uri.ts';
 export type { ErrorContext } from './errors/index.ts';
 /* ------------------------------ errors ---------------------------------- */
 export {
@@ -56,9 +53,9 @@ export type {
   MigrationModule,
   MongoMigrationRunner,
   MongoMigrationRunnerOptions,
-} from './migrations.ts';
+} from './migrations/index.ts';
 /* --------------------------- migrations --------------------------------- */
-export { createMongoMigrationRunner } from './migrations.ts';
+export { createMongoMigrationRunner } from './migrations/index.ts';
 export type { RetryOptions } from './mongo-helpers.ts';
 /* --------------------------- mongo helpers ------------------------------ */
 export { withRetry, withTransaction } from './mongo-helpers.ts';
@@ -134,6 +131,9 @@ export type {
 } from './service/aggregation/index.ts';
 export type { SearchConfig } from './service/aggregation-pipeline.ts';
 export type { AggregationStages } from './service/aggregation-stages.ts';
+export { createResolveCollectionName } from './service/collection-name.ts';
+/* --------------------------- connection -------------------------------- */
+export { normalizeMongoUrl } from './service/connection-uri.ts';
 export type {
   CrudOps,
   FindQueryOptions,

@@ -1,130 +1,107 @@
 # ninox
 
-Schema-first MongoDB ORM for Bun + Node, with **performance as a first-class
-feature**: DataLoader-batched relations, read-through query caching, in-flight
-query dedup, and single-round-trip `$facet` pagination.
+**Schema-first MongoDB ORM for Bun & Node — typed, cached, and fast out of the box.**
 
-Architecturally modeled on `@platform-tooling/sdk-db` (pure helpers → op
-factories → per-database manager), but with its own typed schema DSL.
+Declare your collections once as TypeScript schemas. ninox turns that single definition into your types, a fluent query builder, and MongoDB `$jsonSchema` validation with indexes — then makes the everyday paths fast by default, so you can stop hand-rolling caches and N+1 workarounds.
 
-## Table of contents
+**Node ≥ 18.17** · **Bun ≥ 1.0** · **TypeScript ≥ 5.5** (optional) · **MongoDB 4.4+** · **MIT**
 
-- [Features](#features)
-- [Install](#install)
-- [Quick start](#quick-start)
-- [Schema DSL reference](#schema-dsl-reference)
-- [Typed aggregation pipeline](#typed-aggregation-pipeline)
-- [Pagination (offset + keyset)](#pagination-offset--keyset)
-- [Geospatial](#geospatial)
-- [Search & joins](#search--joins)
-- [Relations + populate](#relations--populate)
-- [Repository layer](#repository-layer)
-- [Auto timestamps](#auto-timestamps)
-- [Transactions & migrations](#transactions--migrations)
-- [Performance by default](#performance-by-default)
-- [Hot cache (high throughput)](#hot-cache-high-throughput)
-- [Error handling](#error-handling)
-- [Validation](#validation)
-- [Hooks](#hooks)
-- [Logging & configuration](#logging--configuration)
-- [Operations: health & multi-DB](#operations-health--multi-db)
-- [Utilities](#utilities)
-- [Schema introspection](#schema-introspection)
-- [Service ↔ repository naming](#service--repository-naming)
-- [API reference](#api-reference)
-- [Examples](#examples)
-- [Performance](#performance)
-- [Production considerations](#production-considerations)
-- [Tests](#tests)
-- [Development](#development)
-- [Publishing](#publishing)
+## Why you'll like it
 
-## Features
+- 🧠 **One schema, three jobs.** A single `s.*` schema produces your TypeScript types, the query builder's autocomplete, and the DB validator + indexes. One source of truth, nothing to keep in sync.
+- ⚡ **Fast by default.** Read caching and in-flight dedup are on out of the box — repeated queries make *zero* DB calls, and identical concurrent queries share one.
+- 🔗 **Relations without the N+1.** `populate()` batches lookups into a few `$in` queries, no matter how many related docs you load.
+- 📄 **One-round-trip pagination.** Data and total count from a single `$facet` call, plus cursor (keyset) pagination that stays cheap on deep pages.
+- 🛡️ **Errors you can actually handle.** Driver errors are mapped to a small taxonomy (`BadRequest` / `DomainError` / `InfraError`) with HTTP statuses and a client-safe serializer.
+- 🔥 **A cache that stays fresh by itself.** The global HotCache serves your hottest queries from memory and keeps them fresh with change streams (replica sets) or a background refresh ticker (standalone) — reads never block.
+- 🏭 **Production touches built in.** Graceful transactions, file-based migrations, health checks, multi-DB services, a high-throughput hot cache, and an opt-in schema-drift guard.
 
-- **Typed schema DSL → MongoDB `$jsonSchema`** — one schema drives TypeScript
-  types (`InferDoc`), the fluent query builder's field typing, and server-side
-  document validation + indexes. Validation is **DB-level only** (there is no
-  client-side schema-validation layer) and **strict by default**:
-  `additionalProperties: false` rejects unknown keys unless a field opts out
-  (`s.object(..., { additionalProperties: true })`). Field kinds:
-  `s.string/integer/number/double/long/decimal/boolean/date/objectId/enum/array/
-  object/geoPoint/null/any/jsonSchema`, chainable with `.optional()` /
-  `.default(v)`. See [Schema DSL reference](#schema-dsl-reference).
-- **Schema-first inference** — collection-name literals derive doc types; no
-  `<TDoc>` generics at call sites.
-- **Fluent query builder** — `.where().or().sort().skip().limit().select().hint()`
-  → `.one()/.many()/.cursor()/.count()/.exists()`; projections pushed to the driver.
-- **Full CRUD** — `getOne/getOneOrFail/findMany/cursor/findActive*/insertOne/
-  insertMany/updateOne/updateMany/findOneAndUpdate/findOneAndReplace/replaceOne/
-  findOneAndDelete/delete*/softDeleteOne/upsert/bulkUpsert/bulkWrite/distinct/
-  countDocuments/estimatedDocumentCount/watchCollection/updateWithVersion`
-  (optimistic `__v` locking).
-- **Pagination** — `paginateFlexible` via a single `$facet` aggregation (count +
-  data in one round trip) AND `paginateCursor` keyset/cursor pagination (O(log n)
-  per page, opaque `nextCursor`, no deep `$skip`, stable under concurrent writes).
-  See [Pagination](#pagination-offset--keyset).
-- **Aggregation** — `groupBy`, `textSearch` (regex + `$text`, with `$language` /
-  `$diacriticSensitive` / score-sorting), `dateRangeAnalysis`, `lookupJoin`, a
-  typed `aggregate(stages => [...])` callback builder, and a fully type-safe
-  `pipeline()` chained builder (stage-by-stage type tracking, foreign-collection
-  `$lookup` sub-pipelines, typed `$facet`, `$geoNear` geospatial stage, inferred
-  results). See [Search & joins](#search--joins) and [Geospatial](#geospatial).
-- **Geospatial** — `s.geoPoint()` GeoJSON fields + a `$geoNear` pipeline stage
-  with computed distances (`2dsphere` index).
-- **Auto timestamps** — per-collection `timestamps` option stamps `createdAt` /
-  `updatedAt` on insert and `updatedAt` on every update (custom field names via
-  an options object).
-- **Repository layer** — optional `createRepository(manager, collection)` wraps a
-  collection into a domain-typed interface (`getById`/`getByIds`/`create`/
-  `update`/`updateVersioned`/`page`/`pageCursor`/`populate`/…).
-- **Relations + DataLoader** — `belongsTo` / `hasMany` / `manyToMany`, resolved by
-  `populate()` with batched `$in` queries (kills the N+1 problem).
-- **Query cache** — LRU read cache with write-through invalidation (and TTL).
-- **Hot cache (opt-in)** — a global `createHotCache()` instance serves registered
-  queries from a per-query LRU (call parameters are the cache key). Replica-set
-  deployments invalidate via change streams on every write; standalone servers use
-  a global ticker that background-refreshes at an interval — high-throughput apps
-  keep hot reads off the DB.
-- **In-flight dedup** — identical concurrent reads share one driver call.
-- **Error taxonomy** — `DomainError` / `InfraError` / `BadRequest` with driver-error
-  mapping (`mapMongoDriverError`) **on by default** (`wrapMongoErrors: false` to opt
-  out), per-code HTTP statuses (404/409/422/504), and a client-safe `serializeError()`
-  for framework error middleware.
-- **Write-retry safety** — writes are **not** auto-retried by default (at-least-once);
-  opt in per op with `retryWrites: true`. Reads always retry transient errors.
-- **Hooks** — `before/after` create/update/delete + `afterRead` per collection.
-- **Transactions & migrations** — graceful session transactions (capability probe +
-  standalone fallback) and a file-based migration runner with an idempotency journal
-  (claim-based: atomic upsert claim → `running` → `applied`, concurrent-runner safe).
-- **Connection pooling** — one `MongoClient` per URL, rollback-on-failure,
-  normalized URLs, soft-delete + optimistic-lock helpers, and `service.health()`
-  (per-DB ping). Multi-DB services are first-class (one typed manager per client,
-  database-namespaced cache keys). Per-op
-  `collation`/`readPreference`/`comment`/`let`/`timeoutMS` flow through every
-  read/write/aggregate.
-- **Index lifecycle** — `createSchema` installs declared indexes; `syncIndexes`
-  reconciles drift (creates missing, drops undeclared).
+## ninox vs native MongoDB vs Mongoose
+
+Built on the official `mongodb` driver, but with the ergonomics of an ORM and
+the performance you wouldn't expect from one. Side by side:
+
+| | ninox | native `mongodb` driver | Mongoose |
+| --- | --- | --- | --- |
+| One schema → types + queries + DB validation | ✅ `InferDoc` + typed everything | 🟡 manual `<TDoc>` generics | 🟡 schemas, loose query typing |
+| Validation enforcement | ✅ DB-level `$jsonSchema`, strict by default | ❌ you write `$jsonSchema` yourself | 🟡 client-side only, no DB validator |
+| Read query cache (repeat reads = **0** round trips) | ✅ on by default | ❌ none | ❌ none |
+| In-flight dedup (N identical reads → **1** call) | ✅ on by default | ❌ none | ❌ none |
+| Relations without N+1 | ✅ DataLoader-batched `populate` | ❌ manual | 🟡 `populate`, can N+1 |
+| Pagination in one round trip | ✅ `$facet` + keyset cursors | ❌ manual | 🟡 count + find (2 round trips) |
+| Typed aggregation pipeline | ✅ stage-by-stage inferred types | ❌ untyped | ❌ loosely typed |
+| Optimistic locking / soft delete | ✅ `updateWithVersion` / `softDeleteOne` | ❌ manual | 🟡 manual / plugin |
+| Lifecycle hooks | ✅ `before/after` + `afterRead` | ❌ | ✅ |
+| Hot cache (change-stream / background refresh) | ✅ | ❌ | ❌ |
+| Error taxonomy + driver mapping | ✅ `BadRequest` / `DomainError` / `InfraError` | ❌ raw driver errors | 🟡 scattered error types |
+| File-based migrations | ✅ runner + idempotency journal | ❌ | 🟡 plugin |
+| Health checks + multi-DB | ✅ per-DB pings, namespaced caches | ❌ | 🟡 |
+| Change tracking / doc magic | none — explicit load → mutate → persist | — | 🟡 dirty-checking overhead |
+| Runtime | ✅ Bun & Node, ESM-first | ✅ | 🟡 Node-first |
+
+**The headline numbers** (localhost, seeded with 200 users / 1000 orders):
+
+| scenario | naive | ninox |
+| --- | --- | --- |
+| populate 100 orders | 17,000 queries (N+1) | **340 queries** (~50× fewer round trips, ~6× faster) |
+| 50 concurrent identical reads | 50 server queries, 17 ms | **1 server query**, 1.5 ms |
+| cache hit | 1 driver call | **0 driver calls** |
+| deep aggregation (multi-`$lookup` join) | 17,000 queries (N+1) | **170 queries** (~100× fewer round trips) |
+
+And you're never locked in — the raw `client` escape hatch is one property away
+when you need driver-level access. [Full benchmark](#performance) ·
+[Run the examples](#examples)
+
+## Flagship features
+
+Three capabilities that set ninox apart — the ones you'll reach for when you need to go from "it works" to "it's fast and observable".
+
+### 🔥 Hot cache — keep your hottest queries in memory
+
+Register the queries that run on every request with one global `createHotCache()`. Reads are served from a per-query LRU (call parameters become the cache key), so the DB is only touched on a cold miss. On a replica set, change-stream watchers invalidate the cache the moment a write lands — even from other processes. → [Full guide](#hot-cache-high-throughput)
+
+### 🔄 Background refresh — a self-updating cache
+
+On standalone servers (no change streams), a global background ticker re-fetches your registered queries on an interval and swaps in fresh values — a stale value keeps being served until the replacement arrives, so **reads never block**. Opt in per query with `refreshIntervalMs`, or drive freshness entirely by hand (`autoRefresh: false`). → [Background refresh system](#background-refresh-system)
+
+### 🪝 MongoDB lifecycle hooks — middleware for your data
+
+Per-collection `before/after` hooks for create, update, and delete, plus `afterRead`. Declare them on the collection and they fire around every ORM op — audit logging, cache invalidation, sensitive-field masking, you name it. `afterRead` runs on every read (cache hit or miss) with a fresh per-caller clone, so hooks can never poison the cache. → [Hooks guide](#hooks)
 
 ## Install
 
 ```bash
-bun add mongodb        # only runtime dependency
-bun install
+# bun
+bun add ninox mongodb
+
+# npm
+npm install ninox mongodb
+
+# pnpm / yarn
+pnpm add ninox mongodb
 ```
+
+`mongodb` is ninox's **only runtime dependency**. TypeScript is optional — plain JS works too, you just lose the inferred types.
+
+**Requirements**
+
+- Node ≥ 18.17 (ESM) or Bun ≥ 1.0
+- MongoDB server 4.4+ (5.1+ for `$fill` / `$densify`)
+- Transactions, change streams, and change-stream cache invalidation need a **replica set or `mongos`**
 
 ## Quick start
 
 ```ts
 import {
-  createMongoToolkit,          // service + migrations
+  createMongoToolkit,   // service + migrations
   s,
-  defineCollection,            // name + schema + optional indexes/hooks
-  defineCollections,           // derive the collections map from named schemas
+  defineCollection,     // name + schema + optional indexes/hooks
+  defineCollections,    // derive the collections map from named schemas
   belongsTo,
   type InferDoc,
 } from 'ninox';
 
-// Collection names live on the schemas themselves.
+// 1. Describe your collections. Names live on the schema itself.
 const userSchema = s.object({
   _id: s.objectId(),
   email: s.string(),
@@ -140,8 +117,7 @@ const orderSchema = s.object({
 }, { name: 'orders' });
 type Order = InferDoc<typeof orderSchema>;
 
-// `defineCollection` attaches a name (plus optional indexes/hooks);
-// `defineCollections` derives the `collections` map keyed by those names.
+// 2. Attach a name (plus optional indexes and hooks), then derive the map.
 const users = defineCollection('users', userSchema, {
   indexes: [{ key: { email: 1 }, options: { unique: true } }],
   hooks: { beforeCreate: (ctx) => console.log('creating', ctx.doc?.email) },
@@ -151,39 +127,46 @@ const { service } = createMongoToolkit({
   primary: {
     name: 'app',
     dbUrl: process.env.MONGO_URL,
-    collectionPrefix: process.env.DB_PREFIX,        // physical: `app-users`
+    collectionPrefix: process.env.DB_PREFIX,   // physical name: `app-users`
     collections: defineCollections(users, orderSchema),
   },
 });
-// Query cache + in-flight dedup are ON by default — no config needed.
+// Query cache + in-flight dedup are ON by default — nothing to enable.
 
+// 3. Connect, install the validator + indexes, and start reading & writing.
 await service.makeConnections();
-const db = service.db.primaryClient;                // fully typed manager
+const db = service.db.primaryClient;           // fully typed manager
 
-await db.createSchema('users');                     // $jsonSchema validator + indexes
+await db.createSchema('users');
 
 const { insertedId } = await db.insertOne('users', {
   email: 'ada@example.com', role: 'admin', createdAt: new Date(),
 });
 
-// Fluent query builder (projection pushed to driver)
+// Fluent query builder — projections are pushed down to the driver.
 const admins = await db.query('users')
   .where({ role: 'admin' })
   .select(['_id', 'email'])
   .limit(10)
   .many();
 
-// $facet pagination — one round trip
-const page = await db.paginateFlexible('orders', { userId: insertedId }, { page: 1, limit: 20, sort: { total: -1 } });
+// $facet pagination — data + count in one round trip.
+const page = await db.paginateFlexible(
+  'orders',
+  { userId: insertedId },
+  { page: 1, limit: 20, sort: { total: -1 } },
+);
 
-// DataLoader-batched population — no N+1
+// DataLoader-batched population — no N+1.
 const orders = await db.findMany('orders', { userId: insertedId });
-await db.populate(orders, [belongsTo({ collection: 'users', localField: 'userId', as: 'customer' })]);
+await db.populate(orders, [
+  belongsTo({ collection: 'users', localField: 'userId', as: 'customer' }),
+]);
 
-// Optimistic locking
+// Optimistic locking.
 const result = await db.updateWithVersion('users', { _id: insertedId }, { $set: { role: 'user' } });
 
-// Transactions (falls back to non-transactional on standalone servers)
+// Transactions — gracefully fall back on standalone servers.
 await db.transaction(async (session) => {
   await db.insertOne('orders', { userId: insertedId, total: 5 }, { session: session ?? undefined });
 });
@@ -191,15 +174,40 @@ await db.transaction(async (session) => {
 await service.closeConnections();
 ```
 
+## Key features
+
+A quick tour — each entry links to the full guide further down.
+
+| | Feature | What it does for you |
+| --- | --- | --- |
+| 🧠 | [Schema DSL](#schema-dsl-reference) | One schema → types, typed queries, and DB validation |
+| 🔎 | [Query builder + CRUD](#query-builder--full-crud) | Fluent, typed queries; the full insert/update/delete/upsert family |
+| ⚡ | [Cache + dedup](#performance-by-default) | 0 round trips on repeat reads; N identical reads → 1 DB call |
+| 🔗 | [Relations + DataLoader](#relations--populate) | `belongsTo` / `hasMany` / `manyToMany` without N+1 |
+| 📄 | [Pagination](#pagination-offset--keyset) | `$facet` (data + count, 1 round trip) + keyset cursors |
+| 📊 | [Typed aggregation](#typed-aggregation-pipeline) | Chainable `pipeline()` with inferred result types |
+| 🔍 | [Search & joins](#search--joins) | `$text` / regex search + single-hop `lookupJoin` |
+| 🗺️ | [Geospatial](#geospatial) | `s.geoPoint()` + typed `$geoNear` with distances |
+| 📦 | [Repository layer](#repository-layer) | Optional domain-typed wrapper (`getById`, `create`, `page`, …) |
+| ⏱️ | [Auto timestamps](#auto-timestamps) | `createdAt` / `updatedAt` for free, custom names supported |
+| 🔁 | [Transactions & migrations](#transactions--migrations) | Graceful sessions + file-based runner with a journal |
+| 🔥 | [Hot cache](#hot-cache-high-throughput) | Change-stream / ticker-driven in-memory query cache |
+| 🔄 | [Background refresh](#background-refresh-system) | Self-updating standalone cache — reads never block |
+| 🧹 | [Data invalidation](#data-invalidation-react-query-style) | React Query-style — invalidate by name, params, or collection |
+| 🛡️ | [Error handling](#error-handling) | `BadRequest` / `DomainError` / `InfraError` + HTTP mapping |
+| ✅ | [Validation & drift](#validation) | DB `$jsonSchema` (strict) + opt-in drift detection |
+| 🪝 | [Mongo hooks](#hooks) | `before/after` create/update/delete + `afterRead` |
+| 🩺 | [Health & multi-DB](#operations-health--multi-db) | Per-DB pings, multi-client services, change-stream watch |
+
 ## Typed aggregation pipeline
 
 `db.pipeline(collection)` is a chainable, fully type-safe aggregation builder.
-Each stage is typed against the **current** document shape, so field autocomplete
-and the inferred result type follow the schema through `$match`/`$project`/
-`$addFields`/`$group`/`$sort`/`$unwind`/`$lookup`/`$facet`/…:
+Each stage is typed against the **current** document shape — field autocomplete
+and the inferred result type follow the schema through `$match` / `$project` /
+`$addFields` / `$group` / `$sort` / `$unwind` / `$lookup` / `$facet` and beyond.
 
 ```ts
-// Result type is inferred through the chain.
+// The result type is inferred through the chain.
 const byStatus = await db
   .pipeline('orders')
   .match({ status: 'paid' })                                  // Order fields autocomplete
@@ -232,9 +240,24 @@ const faceted = await db
 
 Terminals: `.toArray()`, `.first()`, `.cursor()`. The callback
 `db.aggregate('orders', (stages) => [...])` is collection-typed too (its
-`match`/`project`/`sort`/`group`/`lookup`/`facet` are checked against the
-schema; use `db.pipeline()` when you also want inferred result types). See
-[`examples/10-typed-pipeline.ts`](./examples/10-typed-pipeline.ts).
+`match` / `project` / `sort` / `group` / `lookup` / `facet` are checked against
+the schema); reach for `db.pipeline()` when you also want inferred result types.
+See [`examples/10-typed-pipeline.ts`](./examples/10-typed-pipeline.ts).
+
+## Query builder & full CRUD
+
+Fluent queries: `.where().or().sort().skip().limit().select().hint()` →
+`.one() / .many() / .cursor() / .count() / .exists()`. Projections are pushed
+down to the driver, so you only transfer the fields you asked for.
+
+The full CRUD family — all typed, all cache-aware:
+
+`getOne` / `getOneOrFail` / `findMany` / `cursor` / `findActive*` / `insertOne` /
+`insertMany` / `updateOne` / `updateMany` / `findOneAndUpdate` /
+`findOneAndReplace` / `replaceOne` / `findOneAndDelete` / `delete*` /
+`softDeleteOne` / `upsert` / `bulkUpsert` / `bulkWrite` / `distinct` /
+`countDocuments` / `estimatedDocumentCount` / `watchCollection` /
+`updateWithVersion` (optimistic `__v` locking).
 
 ## Schema DSL reference
 
@@ -276,9 +299,9 @@ const userSchema = s.object({
 type User = InferDoc<typeof userSchema>;
 ```
 
-The ORM reserves `_id` (ObjectId), the optimistic-lock `__v`, and the soft-delete
-`deletedAt` in the validator automatically, so strict validation never rejects
-them even when your schema omits them.
+> 💡 **Good to know:** ninox reserves `_id`, the optimistic-lock `__v`, and the
+> soft-delete `deletedAt` in the validator automatically — strict validation
+> never rejects them even when your schema omits them.
 
 ## Pagination (offset + keyset)
 
@@ -407,7 +430,7 @@ const page = await users.page({ role: 'admin' }, { page: 1, limit: 20 });
 
 ## Auto timestamps
 
-Set `timestamps` on a collection definition and the ORM stamps `createdAt` /
+Set `timestamps` on a collection definition and ninox stamps `createdAt` /
 `updatedAt` on insert and `updatedAt` on every update (including upserts and
 replacements).
 
@@ -436,14 +459,14 @@ await runner.scaffold('add_tags'); // create a new NNN_add_tags.ts template
 
 ## Performance by default
 
-The **default path is the fast path**. A `QueryCache` and in-flight dedup are
+The **default path is the fast path.** A `QueryCache` and in-flight dedup are
 created and enabled automatically — repeated identical reads become cache hits
 (0 driver calls) and identical concurrent reads coalesce into one driver call.
 Opt out when you need to:
 
 ```ts
 // Service-wide: disable caching, dedup, or everything at once.
-createMongoService(clients, { cache: null });          // no read cache
+createMongoService(clients, { cache: null });           // no read cache
 createMongoService(clients, { dedupeReads: false });    // no dedup
 createMongoService(clients, { perf: false });           // both off
 createMongoService(clients, { cache: { maxSize: 1000 } }); // configure the default cache
@@ -461,7 +484,7 @@ Pass a `QueryCache` instance you own to read cache health — `cache.stats()`
 reports current size plus lifetime `hits` / `misses` / `sets` / `deletes` /
 `invalidateEvents` / `clearEvents` / `evictions` (hit rate is the key signal).
 
-> **Cache invalidation is write-through only.** Every ORM write drops that
+> ⚠️ **Cache invalidation is write-through only.** Every ninox write drops that
 > collection's cached reads, but reads are **not** invalidated by external
 > writers — other processes, the raw `client` escape hatch, or direct DB
 > writes. With the default `ttlMs: 0` those reads stay stale indefinitely, so
@@ -548,9 +571,102 @@ Cached results are shared **by reference** (zero clone overhead); if a caller mi
 mutate a result, enable per-query `clone: true` (or `cache: { clone: true }`) so
 each read returns a fresh copy and can't poison the cache.
 
+## Background refresh system
+
+The standalone-mode workhorse behind the HotCache: a single global background
+ticker that keeps your registered queries fresh without a request ever blocking
+on the DB.
+
+**How it works**
+
+- Every `tickIntervalMs` (default `1000` ms) the ticker scans the registered
+  queries and re-runs the loaders for any entry whose `refreshIntervalMs` is due.
+- Fresh values **swap in behind the scenes** — a stale value keeps being served
+  until the replacement arrives, so reads never wait on a refresh.
+- If a background refresh fails (transient error, DB hiccup), the stale value is
+  retained, a warning is logged, and the entry retries on the next pass — you
+  never serve an error where a cached value would do.
+- Only queries that opt in with `refreshIntervalMs` are refreshed. A query with
+  neither `refreshIntervalMs` nor `ttlMs` is served until manually invalidated —
+  `start()` logs a warning naming those queries so you can opt in deliberately.
+
+**Configuration**
+
+```ts
+const hot = createHotCache({
+  probe,                    // auto-detect replica vs standalone
+  tickIntervalMs: 1000,     // how often the background ticker runs
+  autoRefresh: true,        // master switch for the ticker (default true)
+});
+
+// Per-query: refresh this entry every 500ms in the background.
+hot.register('orderStats', {
+  refreshIntervalMs: 500,
+  loader: async () => db.countDocuments('orders', {}),
+});
+
+// Prefer full control? Turn the ticker off and drive freshness yourself:
+const manual = createHotCache({ probe, autoRefresh: false, defaultTtlMs: 5_000 });
+```
+
+On a replica set the same freshness is delivered event-driven by change streams
+instead — see [Hot cache](#hot-cache-high-throughput).
+
+## Data invalidation (React Query style)
+
+If you've used TanStack Query, ninox's cache invalidation will feel familiar —
+same ideas of query keys, invalidation by key, and automatic refetch. Here's the
+mapping:
+
+| React Query | ninox |
+| --- | --- |
+| `queryKey` | the cache key — HotCache: **query name + call parameters**; query cache: **collection + filter hash** |
+| `queryClient.invalidateQueries(['products'])` | `hot.invalidateCollection('products')` or `hot.invalidate('topProducts')` |
+| invalidating one exact entry | `hot.invalidateParams('topProducts', 3)` / `topProducts.invalidate(3)` |
+| `refetchInterval` (background refetch) | the standalone [background ticker](#background-refresh-system) (`refreshIntervalMs`) |
+| `staleTime` / `gcTime` | `ttlMs` (per-query, or `defaultTtlMs` on the HotCache) |
+| refetch after a mutation | **automatic** — every ninox write invalidates that collection's cache, no wiring needed |
+
+**What keeps the cache correct, by default:**
+
+1. **Write-through invalidation.** Every ORM insert/update/delete drops that
+   collection's cached reads immediately — like React Query invalidating on a
+   mutation, but you never have to call it.
+2. **External-writer protection.** Writes from other processes, the raw `client`
+   escape hatch, or direct DB access can't invalidate on their own. Three ways to
+   stay correct in multi-writer deployments:
+   - set `cache: { ttlMs }` so stale entries expire,
+   - turn on `cacheWatch: true` (replica sets) so change streams invalidate the
+     shared cache on external writes too, or
+   - route hot reads through `createHotCache()`.
+
+**The invalidation API at a glance:**
+
+```ts
+// Query cache — invalidated automatically on every ORM write.
+db.insertOne('orders', order); // drops all cached 'orders' reads
+
+// HotCache — manual invalidation, React Query style:
+topProducts.invalidate();              // drop every entry for this query
+topProducts.invalidate(3);             // drop just the { limit: 3 } entry
+hot.invalidateParams('topProducts', 3); // same, via dynamic name lookup
+hot.invalidateCollection('products');  // drop every query bound to 'products'
+
+// Or let the cache invalidate itself:
+hot.register('topProducts', {
+  loader: async (limit: number) => db.findMany('products', {}, { limit }),
+  watch: [{ db: db.client, collection: 'products' }], // change-stream invalidation (replica)
+  refreshIntervalMs: 500,                            // background refetch (standalone)
+});
+```
+
+One difference worth knowing: there's no component tree here. Invalidation is
+collection-scoped and happens at the data layer, so *any* client (API, worker,
+CLI) shares the same cache instead of one per component.
+
 ## Error handling
 
-Operations throw a small error taxonomy (`ninox` exports all of them):
+ninox throws a small error taxonomy (`ninox` exports all of them):
 
 | Error | Meaning | HTTP |
 | --- | --- | --- |
@@ -559,7 +675,7 @@ Operations throw a small error taxonomy (`ninox` exports all of them):
 | `InfraError` | Infrastructure failure — `MONGO_TIMEOUT`, `MONGO_QUERY_ERROR`, … | 504 / 500 |
 
 `mapMongoDriverError` converts raw driver errors (11000 dup, 112 conflict, 50
-Timeout, 121 validation, bulk-write) into the taxonomy with `db`/`collection`/
+Timeout, 121 validation, bulk-write) into the taxonomy with `db` / `collection` /
 `op` context. This is **on by default** — set `wrapMongoErrors: false` to surface
 raw driver errors instead. `statusCode` is refined per code: `NOT_FOUND` → 404,
 `DUPLICATE_KEY` / `VERSION_CONFLICT` / `COLLECTION_EXISTS` / `SCHEMA_DRIFT` → 409,
@@ -582,12 +698,14 @@ app.use((err, _req, res, _next) => {
 The `ERROR_HTTP_STATUS` table and `httpStatusForError(err)` are also exported if
 you need the code → status mapping yourself.
 
-## Validation
+> 💡 **Write-retry safety:** writes are **not** auto-retried by default
+> (at-least-once); opt in per op with `retryWrites: true`. Reads always retry
+> transient errors.
 
 Schema validation is enforced **by MongoDB** — the DB `$jsonSchema` validator
 derived from your schema is installed with `createSchema` (and hot-swapped with
 `updateSchema`), and the DB rejects violating writes with `VALIDATION_FAILED`.
-The ORM deliberately does **not** validate *incoming user input* at runtime (no
+ninox deliberately does **not** validate *incoming user input* at runtime (no
 client-side/zod layer).
 
 - **Strict by default** — `additionalProperties: false` is emitted unless a
@@ -600,13 +718,14 @@ client-side/zod layer).
   without declaring those fields.
 - **Compile-time safety** — `InferDoc` types catch shape errors at build time;
   the DB validator is the runtime backstop.
-- **Rich `$jsonSchema` keywords** — the DSL emits `minLength`/`maxLength`/`pattern`
-  (regex), `minimum`/`maximum`/`multipleOf`/`exclusiveMinimum`/`exclusiveMaximum`,
-  `minItems`/`maxItems`/`uniqueItems`, `minProperties`/`maxProperties`, strict
-  `additionalProperties`, and distinct BSON kinds for `s.double()` / `s.long()` /
-  `s.decimal()` (Decimal128). For anything the DSL doesn't model (e.g.
-  `patternProperties`, `allOf`/`anyOf`/`oneOf`/`not`, `dependencies`), embed a raw
-  fragment with `s.jsonSchema({ ... })` — it is passed through verbatim.
+- **Rich `$jsonSchema` keywords** — the DSL emits `minLength` / `maxLength` /
+  `pattern` (regex), `minimum` / `maximum` / `multipleOf` / `exclusiveMinimum` /
+  `exclusiveMaximum`, `minItems` / `maxItems` / `uniqueItems`, `minProperties` /
+  `maxProperties`, strict `additionalProperties`, and distinct BSON kinds for
+  `s.double()` / `s.long()` / `s.decimal()` (Decimal128). For anything the DSL
+  doesn't model (e.g. `patternProperties`, `allOf` / `anyOf` / `oneOf` / `not`,
+  `dependencies`), embed a raw fragment with `s.jsonSchema({ ... })` — it is
+  passed through verbatim.
 - **Validation error detail** — when `wrapMongoErrors` is on, a `VALIDATION_FAILED`
   `DomainError` carries the offending field paths (`extra.fields`), the failing
   document id (`extra.documentId`), and the raw `extra.details`, so a rejected
@@ -622,7 +741,7 @@ older app version, another service, the raw driver with validation bypassed, or
 left behind by a tightened `updateSchema`. Reads return these docs verbatim
 (they were stored before the validator), so drift is invisible unless you look.
 
-The ORM can detect drift on read. On every **DB fetch** (cache-miss — cache hits
+ninox can detect drift on read. On every **DB fetch** (cache-miss — cache hits
 trust the already-validated stored value), freshly-read documents are checked
 against the declared schema and reported per `MongoServiceConfig.drift`:
 
@@ -650,7 +769,7 @@ This pairs with the DB validator: the server rejects violating *writes*, and the
 drift layer surfaces violating *stored* documents so they can't silently corrupt
 reads.
 
-> **Drift checking costs CPU per fetch.** `'report'` (the default) walks the
+> ⚠️ **Drift checking costs CPU per fetch.** `'report'` (the default) walks the
 > full document tree against the schema on every DB fetch (cache-misses only —
 > cache hits skip it). For very high-QPS read paths that don't need it, set
 > `drift: 'off'` service-wide or per op (`{ drift: false }`).
@@ -673,7 +792,7 @@ Hook names: `before/afterCreate`, `before/afterUpdate`, `before/afterDelete`,
 `afterRead`. `runHooks` and `HOOK_NAMES` are exported for manual dispatch.
 `afterRead` fires on **every** read — cache hit or miss — and receives a fresh
 per-caller clone, so a mutating hook can't poison the shared cache entry.
-`before/after` create/update/delete hooks fire on actual ORM writes (which
+`before/after` create/update/delete hooks fire on actual ninox writes (which
 invalidate that collection's cache).
 
 ## Logging & configuration
@@ -728,12 +847,12 @@ Re-exported helpers for app code (also via `ninox/utils`):
 - `LRU` / `createCachedFactory` / `createCachedAsyncFactory` — caches (the async
   factory dedupes in-flight calls and **never caches failures**).
 - `stableHash` / `stableStringify` — deterministic, order-insensitive hashing.
-- `cloneDeep` — deep clone preserving `Date`/`ObjectId`/`RegExp`.
+- `cloneDeep` — deep clone preserving `Date` / `ObjectId` / `RegExp`.
 - `createConsoleLogger` / `createNoopLogger` — structured loggers.
 
 ## Schema introspection
 
-`toMongoValidator(schema)` returns the `{ $jsonSchema }` validator the ORM installs
+`toMongoValidator(schema)` returns the `{ $jsonSchema }` validator ninox installs
 via `createSchema`; `toMongoSchema(schema)` returns the bare `$jsonSchema` if you
 need it directly (e.g. in your own provisioning tooling).
 
@@ -810,13 +929,13 @@ shared query cache is opt-in and requires change streams. On a standalone server
 the watchers are rejected, a warning is logged once, and invalidation silently
 disables (the cache stays write-through only) — set `cache: { ttlMs }` there.
 
-**Update payloads are precise.** `updateOne`/`updateMany`/`upsert`/… reject
+**Update payloads are precise.** `updateOne` / `updateMany` / `upsert` / … reject
 unknown keys in object literals AND non-literal patches. The only way an unknown
 key passes is a variable explicitly typed with an index signature
 (`Record<string, any>`) — prefer inline literals for full checking.
 
 **Index drift.** `createSchema` installs declared indexes; if they drift out of
-band (manual drops, other tooling), `syncIndexes('collection')` reconciles
+band (manual drops, other tooling), `syncIndexes('collection')` reconciles —
 creates missing declared indexes and drops undeclared ones (`_id_` kept).
 
 **Observability.** `QueryCache.stats()` (hits/misses/evictions/…) and
@@ -864,7 +983,7 @@ Release notes are kept in [`CHANGELOG.md`](./CHANGELOG.md). The publish gate
 | Bun | ≥ 1.0 |
 | TypeScript | ≥ 5.5 (peer, optional — pure JS works too) |
 | MongoDB driver | `mongodb` ^7 (only runtime dependency) |
-| MongoDB server | 4.4+ core; 5.1+ for `$fill`/`$densify`; **replica set / mongos** for transactions, change streams, and `cacheWatch` |
+| MongoDB server | 4.4+ core; 5.1+ for `$fill` / `$densify`; **replica set / mongos** for transactions, change streams, and `cacheWatch` |
 
 ```bash
 bun run build

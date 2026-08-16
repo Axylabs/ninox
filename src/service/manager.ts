@@ -10,7 +10,6 @@
 import type { Db, Document, MongoClient } from 'mongodb';
 import type { InFlight } from '../cache/in-flight.ts';
 import type { QueryCache } from '../cache/query-cache.ts';
-import { createResolveCollectionName } from '../collection-name.ts';
 import { BadRequest } from '../errors/index.ts';
 import type { HooksRegistry } from '../hooks/hooks.ts';
 import { makePopulator, type PopulateOptions } from '../relation/populate.ts';
@@ -21,6 +20,7 @@ import { asCollectionDefinition, type ExtractDbNames } from '../types.ts';
 import type { LoggerLike } from '../utils/logger.ts';
 import { makeAggregationOps } from './aggregation/index.ts';
 import type { CacheInvalidationRef } from './cache-invalidation.ts';
+import { createResolveCollectionName } from './collection-name.ts';
 import type { CrudOps, TimestampsByCollection } from './crud/index.ts';
 import { makeCrudOps } from './crud/index.ts';
 import { makePaginationOps } from './pagination/index.ts';

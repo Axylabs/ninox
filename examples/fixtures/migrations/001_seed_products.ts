@@ -1,4 +1,4 @@
-import type { MigrationContext } from '../../../src/migrations.ts';
+import type { MigrationContext } from '../../../src/migrations/index.ts';
 
 /** Seed one product via the migration runner. */
 export const up = async (ctx: MigrationContext): Promise<void> => {
