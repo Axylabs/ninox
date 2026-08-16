@@ -108,7 +108,7 @@ export const createMongoMigrationRunner = (
     const padded = String(next).padStart(3, '0');
     const fileName = `${padded}_${name}.ts`;
     const filePath = join(migrationDir, fileName);
-    const template = `import type { MigrationContext } from 'ninox';
+    const template = `import type { MigrationContext } from '@ignex/ninox';
 
 export const up = async (ctx: MigrationContext): Promise<void> => {
   // const users = ctx.service.db.primaryClient;

@@ -1,7 +1,7 @@
-# API Reference — `ninox`
+# API Reference — `@ignex/ninox`
 
 Schema-first MongoDB ORM with performance as a first-class feature. Everything
-below is exported from the package root (`ninox`); the `./utils`
+below is exported from the package root (`@ignex/ninox`); the `./utils`
 sub-path adds the zero-dependency utility bag.
 
 Legend: **V** = value export (function/class/const) · **T** = type-only export.
@@ -83,7 +83,7 @@ Backend-neutral, pure functions (no DB knowledge).
 | `buildKeysetFilter` | V | Tuple-`$or` filter from sort keys + boundary values. |
 | `PaginationResult`, `AggregationMeta`, `CrudListQuery`, `NormalizedPagination`, `RemoveIndexSignature`, `KeysetCursor`, `GeoPoint` | T | Result / helper types. |
 
-## Utils (`ninox` root and `ninox/utils`)
+## Utils (`@ignex/ninox` root and `@ignex/ninox/utils`)
 
 | Export | Kind | Purpose |
 | --- | --- | --- |

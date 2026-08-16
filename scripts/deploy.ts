@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Manual release script for publishing `ninox` to npm.
+ * Manual release script for publishing `@ignex/ninox` to npm.
  *
  * Usage:
  *   bun run scripts/deploy.ts [patch|minor|major|X.Y.Z] [options]
@@ -31,7 +31,7 @@
  * The .npmrc auth token is never read or printed by this script.
  */
 import { exec, spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -174,7 +174,7 @@ async function main() {
   const current = pkg.version;
   const next = nextVersion(current, bumpArg);
 
-  console.log(`${c.bold('\n ninox — manual npm deploy')}`);
+  console.log(`${c.bold(`\n ${pkg.name} — manual npm deploy`)}`);
   console.log(
     c.dim(
       ` current: v${current}   next: v${next}   dry-run: ${dryRun ? 'yes' : 'no'}   tag: ${distTag}`,
@@ -212,7 +212,7 @@ async function main() {
 
   // ---- 4. Dry run ---------------------------------------------------------
   if (dryRun) {
-    await stream('npm publish --dry-run', `npm publish --dry-run --tag ${distTag}`);
+    await stream('npm publish --dry-run', `npm publish --dry-run --access public --tag ${distTag}`);
     console.log(
       `\n${c.green('✔')} Dry run complete — no version bump, no publish, no git changes.`,
     );
@@ -232,12 +232,19 @@ async function main() {
   }
 
   // ---- 6. Bump ------------------------------------------------------------
+  const pkgBeforeBump = readFileSync(join(root, 'package.json'), 'utf8');
   await cmd(`npm version ${next} --no-git-tag-version`, 'Version bump');
   console.log(`${c.green('✓')} bumped package.json to v${next}`);
 
   // ---- 7. Publish (prepublishOnly re-runs typecheck/lint/build) -----------
-  await stream('npm publish', `npm publish --tag ${distTag}`);
-  console.log(`${c.green('✓')} published ninox@${next} to npm (dist-tag "${distTag}")`);
+  try {
+    await stream('npm publish', `npm publish --access public --tag ${distTag}`);
+  } catch (err) {
+    // Roll the bump back so a failed publish never leaves a half-released version.
+    writeFileSync(join(root, 'package.json'), pkgBeforeBump);
+    fail(`publish failed — package.json version rolled back to v${current}`);
+  }
+  console.log(`${c.green('✓')} published ${pkg.name}@${next} to npm (dist-tag "${distTag}")`);
 
   // ---- 8. Git tag + commit (after a successful publish) -------------------
   if (!noGit) {
@@ -254,7 +261,7 @@ async function main() {
     }
   }
 
-  console.log(`\n${c.green('✔')} Deploy complete: ninox@${next} (dist-tag "${distTag}")`);
+  console.log(`\n${c.green('✔')} Deploy complete: ${pkg.name}@${next} (dist-tag "${distTag}")`);
 }
 
 await main();

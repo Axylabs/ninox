@@ -72,13 +72,13 @@ Per-collection `before/after` hooks for create, update, and delete, plus `afterR
 
 ```bash
 # bun
-bun add ninox mongodb
+bun add @ignex/ninox mongodb
 
 # npm
-npm install ninox mongodb
+npm install @ignex/ninox mongodb
 
 # pnpm / yarn
-pnpm add ninox mongodb
+pnpm add @ignex/ninox mongodb
 ```
 
 `mongodb` is ninox's **only runtime dependency**. TypeScript is optional — plain JS works too, you just lose the inferred types.
@@ -99,7 +99,7 @@ import {
   defineCollections,    // derive the collections map from named schemas
   belongsTo,
   type InferDoc,
-} from 'ninox';
+} from '@ignex/ninox';
 
 // 1. Describe your collections. Names live on the schema itself.
 const userSchema = s.object({
@@ -391,7 +391,7 @@ site — collection names, local/foreign fields, and the join collection are all
 validated against the schema registry.
 
 ```ts
-import { belongsTo, hasMany, manyToMany } from 'ninox';
+import { belongsTo, hasMany, manyToMany } from '@ignex/ninox';
 
 // belongsTo → `customer` is `User | null`
 const orders = await db.findMany('orders', {});
@@ -419,7 +419,7 @@ collection-free, domain-typed interface. No change tracking — load → mutate 
 persist is explicit, matching the core op semantics.
 
 ```ts
-import { createRepository } from 'ninox';
+import { createRepository } from '@ignex/ninox';
 const users = createRepository(db, 'users');
 
 const { insertedId } = await users.create({ email, role: 'admin', createdAt: new Date() });
@@ -518,7 +518,7 @@ based on the deployment:
   invalidated — `start()` logs a warning naming them (unbounded staleness).
 
 ```ts
-import { createHotCache, probeMongoCapabilities } from 'ninox';
+import { createHotCache, probeMongoCapabilities } from '@ignex/ninox';
 
 const hot = createHotCache({
   // Auto-detect: replicas → change streams, standalone → ticker.
@@ -687,7 +687,7 @@ exported type guards for HTTP layers, and every `AppError` exposes a stable
 `serializeError(err, ctx?)` one-liner (it maps raw driver errors first):
 
 ```ts
-import { serializeError } from 'ninox';
+import { serializeError } from '@ignex/ninox';
 
 app.use((err, _req, res, _next) => {
   const payload = serializeError(err, { db: 'app', collection: 'users' });
@@ -839,7 +839,7 @@ for await (const change of stream) { /* react to changes */ }
 
 ## Utilities
 
-Re-exported helpers for app code (also via `ninox/utils`):
+Re-exported helpers for app code (also via `@ignex/ninox/utils`):
 
 - `withRetry(fn, { maxAttempts, delayMs })` — transient-error retry with backoff.
 - `withTransaction(client, fn(session))` — manual session transaction helper.

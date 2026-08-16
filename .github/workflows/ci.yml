@@ -164,14 +164,14 @@ jobs:
       - name: Install tarball in a fresh Node consumer
         run: |
           npm pack --pack-destination /tmp >/dev/null
-          TGZ=$(ls /tmp/ninox-*.tgz | head -1)
+          TGZ=$(ls /tmp/ignex-ninox-*.tgz | head -1)
           mkdir -p /tmp/consumer && cd /tmp/consumer
           npm init -y >/dev/null 2>&1
           npm i "$TGZ" typescript@^6.0.3 @types/node@^24 >/dev/null 2>&1
           # Runtime check against the built dist (plain Node ESM)
           cat > index.mjs <<'EOF'
-          import { s, toMongoValidator } from 'ninox';
-          import { stableHash } from 'ninox/utils';
+          import { s, toMongoValidator } from '@ignex/ninox';
+          import { stableHash } from '@ignex/ninox/utils';
           const v = toMongoValidator(s.object({ _id: s.objectId() }, { name: 'x' }));
           if (!v.$jsonSchema || v.$jsonSchema.bsonType !== 'object') process.exit(1);
           console.log('consumer-ok', stableHash(['x', 1]));
@@ -179,8 +179,8 @@ jobs:
           node index.mjs
           # Typecheck against the published d.ts (NodeNext resolution)
           cat > index.mts <<'EOF'
-          import { s, type InferDoc } from 'ninox';
-          import { stableHash } from 'ninox/utils';
+          import { s, type InferDoc } from '@ignex/ninox';
+          import { stableHash } from '@ignex/ninox/utils';
           const x = s.object({ _id: s.objectId(), email: s.string() }, { name: 'users' });
           type User = InferDoc<typeof x>;
           const h = stableHash(['a', 1]);
