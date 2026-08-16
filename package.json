@@ -1,0 +1,78 @@
+{
+  "name": "ninox",
+  "version": "0.1.0",
+  "description": "Schema-first MongoDB ORM with DataLoader-batched relations, query caching, in-flight dedup, and $facet pagination",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.17.0",
+    "bun": ">=1.0.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./utils": {
+      "types": "./dist/utils.d.ts",
+      "import": "./dist/utils.js",
+      "default": "./dist/utils.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "bun run index.ts",
+    "start": "bun run index.ts",
+    "test": "bun test",
+    "test:coverage": "bun test --coverage",
+    "test:types": "tsc --noEmit",
+    "bench": "bun run bench/run-bench.ts",
+    "check:api": "bun run scripts/check-api.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "prepublishOnly": "bun run typecheck && bun run lint && bun run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.0.0",
+    "@types/bun": "latest",
+    "tsup": "^8.0.0",
+    "typescript": "^6.0.3"
+  },
+  "peerDependencies": {
+    "typescript": ">=5.5.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "mongodb": "^7.5.0"
+  },
+  "keywords": [
+    "mongodb",
+    "orm",
+    "typescript",
+    "schema",
+    "query-builder",
+    "dataloader",
+    "cache",
+    "aggregation",
+    "json-schema"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ignex/ninox.git"
+  }
+}
