@@ -1,9 +1,9 @@
 import type { ClientSession, MongoClient } from 'mongodb';
-import { isMongoTransientError } from './errors.ts';
+import { isMongoTransientError } from './errors/index.ts';
 import type { LoggerLike } from './utils/logger.ts';
 import { sleep } from './utils/timeout.ts';
 
-export { isMongoTransientError, TRANSIENT_MONGO_ERROR_CODES } from './errors.ts';
+export { isMongoTransientError, TRANSIENT_MONGO_ERROR_CODES } from './errors/index.ts';
 
 export interface RetryOptions {
   maxAttempts?: number;

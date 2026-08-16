@@ -3,10 +3,7 @@
  * for any thrown value) and `serializeError` (reduce any thrown value to a
  * stable, client-safe payload).
  */
-import {
-  AppError,
-  type ErrorContext,
-} from './classes.ts';
+import { AppError, type ErrorContext } from './classes.ts';
 import { mapMongoDriverError } from './driver-map.ts';
 import { isMongoTransientError } from './transient.ts';
 

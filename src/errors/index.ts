@@ -14,7 +14,20 @@
  * `./http-status.ts` (framework-facing `httpStatusForError` / `serializeError`).
  */
 export type { ErrorContext } from './classes.ts';
-export { AppError, BadRequest, DomainError, ERROR_HTTP_STATUS, InfraError, isAppError, isDomainError, isInfraError } from './classes.ts';
-export { TRANSIENT_MONGO_ERROR_CODES, isMongoDuplicateKeyError, isMongoTransientError } from './transient.ts';
+export {
+  AppError,
+  BadRequest,
+  DomainError,
+  ERROR_HTTP_STATUS,
+  InfraError,
+  isAppError,
+  isDomainError,
+  isInfraError,
+} from './classes.ts';
 export { extractValidationPaths, isMappedMongoError, mapMongoDriverError } from './driver-map.ts';
 export { httpStatusForError, serializeError } from './http-status.ts';
+export {
+  isMongoDuplicateKeyError,
+  isMongoTransientError,
+  TRANSIENT_MONGO_ERROR_CODES,
+} from './transient.ts';

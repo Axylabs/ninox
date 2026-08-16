@@ -3,12 +3,7 @@
  * 121, bulk-write, transient) into the ORM's typed `DomainError` / `InfraError`,
  * plus `extractValidationPaths` for surfacing which `$jsonSchema` fields failed.
  */
-import {
-  AppError,
-  DomainError,
-  InfraError,
-  type ErrorContext,
-} from './classes.ts';
+import { AppError, DomainError, type ErrorContext, InfraError } from './classes.ts';
 import { isMongoDuplicateKeyError, isMongoTransientError } from './transient.ts';
 
 /** Shape of a single `writeErrors[]` entry on a `MongoBulkWriteError`. */
