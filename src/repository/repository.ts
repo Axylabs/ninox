@@ -36,7 +36,7 @@ import type {
   CursorPage,
   CursorPaginationConfig,
   PaginationConfig,
-} from '../service/pagination.ts';
+} from '../service/pagination/index.ts';
 import type { PipelineBuilder } from '../service/pipeline-builder.ts';
 import type { QueryOptions } from '../service/query-options.ts';
 import type { UpdateInput } from '../service/update-types.ts';

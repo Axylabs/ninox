@@ -131,7 +131,7 @@ export type {
   GroupByConfig,
   LookupConfig,
   PipelineCustomization,
-} from './service/aggregation.ts';
+} from './service/aggregation/index.ts';
 export type { SearchConfig } from './service/aggregation-pipeline.ts';
 export type { AggregationStages } from './service/aggregation-stages.ts';
 export type {
@@ -151,7 +151,11 @@ export type {
 } from './service/index.ts';
 /* ------------------------------ service --------------------------------- */
 export { CacheInvalidator, createMongoService } from './service/index.ts';
-export type { CursorPage, CursorPaginationConfig, PaginationConfig } from './service/pagination.ts';
+export type {
+  CursorPage,
+  CursorPaginationConfig,
+  PaginationConfig,
+} from './service/pagination/index.ts';
 export type { PipelineBuilder } from './service/pipeline-builder.ts';
 export type {
   AccumulatorResult,

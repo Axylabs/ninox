@@ -41,7 +41,9 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "prepublishOnly": "bun run typecheck && bun run lint && bun run build"
+    "prepublishOnly": "bun run typecheck && bun run lint && bun run build",
+    "deploy": "bun run scripts/deploy.ts",
+    "deploy:dry": "bun run scripts/deploy.ts --dry-run"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",

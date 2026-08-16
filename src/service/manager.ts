@@ -19,11 +19,11 @@ import type { DriftMode } from '../schema/validate-doc/index.ts';
 import type { CollectionLike, DbClientsDefinition } from '../types.ts';
 import { asCollectionDefinition, type ExtractDbNames } from '../types.ts';
 import type { LoggerLike } from '../utils/logger.ts';
-import { makeAggregationOps } from './aggregation.ts';
+import { makeAggregationOps } from './aggregation/index.ts';
 import type { CacheInvalidationRef } from './cache-invalidation.ts';
 import type { CrudOps, TimestampsByCollection } from './crud/index.ts';
 import { makeCrudOps } from './crud/index.ts';
-import { makePaginationOps } from './pagination.ts';
+import { makePaginationOps } from './pagination/index.ts';
 import { makeSchemaOps } from './schema-ops.ts';
 import { makeTransactionOps } from './transaction.ts';
 

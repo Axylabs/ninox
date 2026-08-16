@@ -7,7 +7,7 @@
  * Kept deliberately thin: each concern lives in a sibling module and is only
  * composed here.
  */
-import { ObjectId, type MongoClient } from 'mongodb';
+import { type MongoClient, ObjectId } from 'mongodb';
 import { InFlight } from '../cache/in-flight.ts';
 import type { DbClientsDefinition, ExtractDbNames } from '../types.ts';
 import type { LoggerLike } from '../utils/logger.ts';

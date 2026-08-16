@@ -28,6 +28,7 @@ import { stableHash } from '../../utils/hash.ts';
 import type { LoggerLike } from '../../utils/logger.ts';
 import { defineCrudOp } from '../crud-op.ts';
 import { checkDocsDrift } from '../drift.ts';
+import { makeOpDeps } from '../op-deps.ts';
 import {
   type QueryOptions,
   type ResolvedQueryOptions,
@@ -35,7 +36,6 @@ import {
   resolveQueryOptions,
 } from '../query-options.ts';
 import type { DbOpMeta } from '../trace-db-op.ts';
-import { traceDbOp } from '../trace-db-op.ts';
 import { formatUpdateFilter } from '../update-format.ts';
 import type { UpdateInput } from '../update-types.ts';
 
@@ -162,19 +162,17 @@ export const createCrudContext = <
   opts: CrudOpsOptions,
 ): CrudContext<TClients, TDb> => {
   const resolve = opts.resolveCollectionName;
-  const trace = <T>(meta: DbOpMeta, fn: () => T | Promise<T>): Promise<T> =>
-    traceDbOp(logger, meta, fn, { wrapMongoErrors: opts.wrapMongoErrors === true });
-  const meta = (collection: ColNames<TClients, TDb>, op: string): DbOpMeta => {
-    const logical = String(collection);
-    const physical = resolve(logical);
-    return { collection: logical, physicalCollection: physical, db: dbLabel, op };
-  };
+  const deps = makeOpDeps<ColNames<TClients, TDb>>(
+    logger,
+    dbLabel,
+    resolve,
+    opts.wrapMongoErrors === true,
+  );
   const coll = <X extends ColNames<TClients, TDb>>(name: X): Collection<DocOf<TClients, TDb, X>> =>
     client.collection<DocOf<TClients, TDb, X>>(resolve(String(name)));
   const toDriverFilter = <X extends ColNames<TClients, TDb>>(
     filter: FilterInput<DocOf<TClients, TDb, X>>,
   ): Filter<DocOf<TClients, TDb, X>> => filter as unknown as Filter<DocOf<TClients, TDb, X>>;
-  const deps = { trace, meta };
   const run = <X extends ColNames<TClients, TDb>, T>(
     collection: X,
     opName: string,
@@ -334,8 +332,8 @@ export const createCrudContext = <
     logger,
     opts,
     resolve,
-    trace,
-    meta,
+    trace: deps.trace,
+    meta: deps.meta,
     coll,
     toDriverFilter,
     run,
