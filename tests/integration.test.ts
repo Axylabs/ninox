@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import type { ObjectId } from 'mongodb';
 import { QueryCache } from '../src/cache/query-cache.ts';
 import { createMongoCapabilitiesStore } from '../src/capabilities.ts';
-import { DomainError } from '../src/errors.ts';
+import { DomainError } from '../src/errors/index.ts';
 import { withGracefulMongoTransaction } from '../src/graceful-transaction.ts';
 import { createMongoMigrationRunner } from '../src/migrations.ts';
 import { belongsTo } from '../src/relation/relation.ts';

@@ -30,7 +30,7 @@
  * each concern small and independently testable.
  */
 import { probeMongoCapabilities } from '../../capabilities.ts';
-import { BadRequest } from '../../errors.ts';
+import { BadRequest } from '../../errors/index.ts';
 import { cloneDeep } from '../../utils/clone.ts';
 import { stableHash } from '../../utils/hash.ts';
 import type { LoggerLike } from '../../utils/logger.ts';

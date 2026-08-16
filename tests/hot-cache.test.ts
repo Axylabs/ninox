@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Db } from 'mongodb';
 import { createHotCache } from '../src/cache/hot-cache/index.ts';
 import { probeMongoCapabilities } from '../src/capabilities.ts';
-import { BadRequest } from '../src/errors.ts';
+import { BadRequest } from '../src/errors/index.ts';
 import type { LoggerLike } from '../src/utils/logger.ts';
 import { sleep } from '../src/utils/timeout.ts';
 import {

@@ -17,7 +17,7 @@
  */
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { type ClientSession, Collection, ObjectId } from 'mongodb';
-import { isInfraError } from '../src/errors.ts';
+import { isInfraError } from '../src/errors/index.ts';
 import { stageBuilder } from '../src/service/pipeline-builder.ts';
 import {
   closeService,

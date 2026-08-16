@@ -29,7 +29,7 @@ import type {
   UpdateOptions,
   UpdateResult,
 } from 'mongodb';
-import { BadRequest } from '../../errors.ts';
+import { BadRequest } from '../../errors/index.ts';
 import { runHooks } from '../../hooks/hooks.ts';
 import { MAX_BATCH_OPS } from '../../shared/constants.ts';
 import type { FilterInput } from '../../shared/filter-types.ts';

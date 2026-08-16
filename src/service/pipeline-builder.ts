@@ -22,7 +22,7 @@ import type {
   Document,
   Hint,
 } from 'mongodb';
-import { BadRequest } from '../errors.ts';
+import { BadRequest } from '../errors/index.ts';
 import type { FilterInput } from '../shared/filter-types.ts';
 import type { DbClientsDefinition, ExtractCollectionNames, ExtractDbNames } from '../types.ts';
 import { type CrudOpDeps, defineCrudOp } from './crud-op.ts';

@@ -13,7 +13,7 @@
 
 import type { Document } from 'mongodb';
 import { ObjectId } from 'mongodb';
-import { BadRequest } from '../errors.ts';
+import { BadRequest } from '../errors/index.ts';
 
 /** Serializable, tagged representation of a cursor boundary value. */
 type TaggedValue = {

@@ -1,4 +1,4 @@
-import { BadRequest } from '../errors.ts';
+import { BadRequest } from '../errors/index.ts';
 
 export interface CrudListQuery {
   page?: number;

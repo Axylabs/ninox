@@ -5,7 +5,7 @@
  * must include a unique tiebreaker (`_id`).
  */
 import type { Document, FindOptions } from 'mongodb';
-import { BadRequest } from '../../errors.ts';
+import { BadRequest } from '../../errors/index.ts';
 import { DEFAULT_FIND_LIMIT, DEFAULT_MAX_LIMIT } from '../../shared/constants.ts';
 import type { FilterInput } from '../../shared/filter-types.ts';
 import { buildKeysetFilter, decodeCursor, encodeCursor } from '../../shared/keyset.ts';

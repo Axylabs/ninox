@@ -5,7 +5,7 @@
  */
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import type { ObjectId } from 'mongodb';
-import { BadRequest } from '../src/errors.ts';
+import { BadRequest } from '../src/errors/index.ts';
 import { type InferDoc, s } from '../src/schema/index.ts';
 import { createMongoService } from '../src/service/index.ts';
 import { MONGO_URL, maybeDescribe, noopLogger, probe } from './helpers.ts';

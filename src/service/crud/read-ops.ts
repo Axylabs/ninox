@@ -14,7 +14,7 @@ import type {
   FindCursor,
   FindOptions,
 } from 'mongodb';
-import { DomainError } from '../../errors.ts';
+import { DomainError } from '../../errors/index.ts';
 import { hasHook, runHooks } from '../../hooks/hooks.ts';
 import { DEFAULT_FIND_LIMIT } from '../../shared/constants.ts';
 import type { FilterInput } from '../../shared/filter-types.ts';

@@ -4,7 +4,7 @@
  * build a `$group` pipeline and run it through the shared op pipeline.
  */
 import type { AggregateOptions, Document } from 'mongodb';
-import { BadRequest } from '../../errors.ts';
+import { BadRequest } from '../../errors/index.ts';
 import type { FilterInput } from '../../shared/filter-types.ts';
 import type { DbClientsDefinition, ExtractCollectionNames, ExtractDbNames } from '../../types.ts';
 import { defineCrudOp } from '../crud-op.ts';

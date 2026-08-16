@@ -1,5 +1,5 @@
 import type { ClientSession, Db, MongoClient, TransactionOptions } from 'mongodb';
-import { mapMongoDriverError } from '../errors.ts';
+import { mapMongoDriverError } from '../errors/index.ts';
 import type { LoggerLike } from '../utils/logger.ts';
 
 export interface TransactionOpsOptions {

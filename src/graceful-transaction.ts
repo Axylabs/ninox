@@ -1,6 +1,6 @@
 import type { ClientSession } from 'mongodb';
 import { type createMongoCapabilitiesStore, mongoTransactionsEnabled } from './capabilities.ts';
-import { mapMongoDriverError } from './errors.ts';
+import { mapMongoDriverError } from './errors/index.ts';
 import type { LoggerLike } from './utils/logger.ts';
 
 /** Minimal transaction runner surface (satisfied by the service `transaction`). */

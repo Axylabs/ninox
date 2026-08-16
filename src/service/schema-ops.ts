@@ -1,5 +1,5 @@
 import type { CreateCollectionOptions, Db, Document } from 'mongodb';
-import { DomainError } from '../errors.ts';
+import { DomainError } from '../errors/index.ts';
 import { type ObjectField, toMongoValidator } from '../schema/index.ts';
 import type { IndexSpec } from '../types.ts';
 import type { LoggerLike } from '../utils/logger.ts';

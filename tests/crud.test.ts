@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Db, Document } from 'mongodb';
 import { cacheCollectionKey, QueryCache } from '../src/cache/query-cache.ts';
-import { BadRequest } from '../src/errors.ts';
+import { BadRequest } from '../src/errors/index.ts';
 import { makeCrudOps } from '../src/service/crud/index.ts';
 import { stableHash } from '../src/utils/hash.ts';
 import type { LoggerLike } from '../src/utils/logger.ts';

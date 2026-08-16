@@ -12,7 +12,7 @@
  */
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { Decimal128, Long, ObjectId } from 'mongodb';
-import { isDomainError } from '../src/errors.ts';
+import { isDomainError } from '../src/errors/index.ts';
 import { s, toMongoValidator } from '../src/schema/index.ts';
 import { customerSchema } from './fixtures/enterprise.ts';
 import {

@@ -6,7 +6,7 @@ import {
   InfraError,
   mapMongoDriverError,
   serializeError,
-} from '../src/errors.ts';
+} from '../src/errors/index.ts';
 import { withRetry } from '../src/mongo-helpers.ts';
 import { defineCrudOp } from '../src/service/crud-op.ts';
 import type { DbOpMeta } from '../src/service/trace-db-op.ts';

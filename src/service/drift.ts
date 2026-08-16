@@ -7,7 +7,7 @@
  * Detection-only — never mutates the documents.
  */
 import type { Document } from 'mongodb';
-import { DomainError } from '../errors.ts';
+import { DomainError } from '../errors/index.ts';
 import type { ObjectField } from '../schema/types.ts';
 import { type DriftMode, validateDoc } from '../schema/validate-doc/index.ts';
 import type { LoggerLike } from '../utils/logger.ts';

@@ -11,7 +11,7 @@ import type { Db, Document, MongoClient } from 'mongodb';
 import type { InFlight } from '../cache/in-flight.ts';
 import type { QueryCache } from '../cache/query-cache.ts';
 import { createResolveCollectionName } from '../collection-name.ts';
-import { BadRequest } from '../errors.ts';
+import { BadRequest } from '../errors/index.ts';
 import type { HooksRegistry } from '../hooks/hooks.ts';
 import { makePopulator, type PopulateOptions } from '../relation/populate.ts';
 import type { JoinedFields, RelationDef, ValidRelation } from '../relation/relation.ts';

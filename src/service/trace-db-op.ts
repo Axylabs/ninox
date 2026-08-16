@@ -1,4 +1,4 @@
-import { mapMongoDriverError } from '../errors.ts';
+import { mapMongoDriverError } from '../errors/index.ts';
 import type { LoggerLike } from '../utils/logger.ts';
 
 /** Structured metadata attached to every logged DB operation. */

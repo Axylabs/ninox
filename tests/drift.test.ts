@@ -21,7 +21,7 @@ import {
   extractValidationPaths,
   isDomainError,
   mapMongoDriverError,
-} from '../src/errors.ts';
+} from '../src/errors/index.ts';
 import type { HookContext } from '../src/hooks/hooks.ts';
 import { type DriftIssue, s, validateDoc } from '../src/schema/index.ts';
 import type { ObjectField } from '../src/schema/types.ts';

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { BadRequest } from '../src/errors.ts';
+import { BadRequest } from '../src/errors/index.ts';
 import { mergeMongoFilters } from '../src/shared/merge-filters.ts';
 import { normalizePageLimit } from '../src/shared/pagination-math.ts';
 import { buildPaginationResult } from '../src/shared/pagination-result.ts';

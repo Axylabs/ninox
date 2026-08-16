@@ -23,7 +23,7 @@ export { createMongoCapabilitiesStore, probeMongoCapabilities } from './capabili
 export { createResolveCollectionName } from './collection-name.ts';
 /* --------------------------- connection -------------------------------- */
 export { normalizeMongoUrl } from './connection-uri.ts';
-export type { ErrorContext } from './errors.ts';
+export type { ErrorContext } from './errors/index.ts';
 /* ------------------------------ errors ---------------------------------- */
 export {
   AppError,
@@ -41,7 +41,7 @@ export {
   mapMongoDriverError,
   serializeError,
   TRANSIENT_MONGO_ERROR_CODES,
-} from './errors.ts';
+} from './errors/index.ts';
 export type { GracefulTransactionOptions, MongoTransactionRunner } from './graceful-transaction.ts';
 /* --------------------------- transactions ------------------------------- */
 export { withGracefulMongoTransaction } from './graceful-transaction.ts';

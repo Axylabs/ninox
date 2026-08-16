@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { ObjectId } from 'mongodb';
-import { BadRequest } from '../src/errors.ts';
+import { BadRequest } from '../src/errors/index.ts';
 import { buildKeysetFilter, decodeCursor, encodeCursor } from '../src/shared/keyset.ts';
 import {
   closeService,
