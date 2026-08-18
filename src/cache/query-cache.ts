@@ -17,6 +17,13 @@ export interface QueryCacheOptions {
 interface Entry<V> {
   value: V;
   expiresAt: number;
+  /**
+   * Per-source-collection version at READ start (see `versionOf`). When an
+   * invalidation bumps a collection's version while a read is in-flight, the
+   * stored version no longer matches and `get()` treats the entry as stale —
+   * this is the write-after-invalidate race guard (mirrors HotCache's `gen`).
+   */
+  versions?: Record<string, number>;
 }
 
 /** Snapshot of cache health (see `QueryCache.stats()`). */
@@ -59,7 +66,10 @@ export const cacheCollectionKey = (dbName: string, physical: string): string =>
  * Read-through query cache with per-collection invalidation.
  *
  * Keys are `collection<sep>hash` so a single write can invalidate every cached
- * read for that collection. Invalidation is WRITE-THROUGH only: the ORM drops a
+ * read for that collection. `set()` can also register an entry under ADDITIONAL
+ * collection keys (see `collections`) so derived reads — e.g. an aggregation
+ * with `$lookup`/`$unionWith` — are invalidated when ANY of their source
+ * collections changes. Invalidation is WRITE-THROUGH only: the ORM drops a
  * collection's entries on every write it performs. Reads are NOT invalidated by
  * external writers (other processes, the raw `client` escape hatch, or direct
  * DB writes) — with `ttlMs: 0` (default) those reads stay stale indefinitely,
@@ -69,6 +79,8 @@ export const cacheCollectionKey = (dbName: string, physical: string): string =>
 export class QueryCache {
   private lru: LRU<string, Entry<unknown>>;
   private index = new Map<string, Set<string>>();
+  /** Per-collection version — bumped on every invalidation/clear of that collection. */
+  private colVersions = new Map<string, number>();
   private ttlMs: number;
   private clone: boolean;
   private hits = 0;
@@ -108,6 +120,15 @@ export class QueryCache {
     return `${collection}${SEP}${filterHash}`;
   }
 
+  /**
+   * Current version of a collection key (db-namespaced, e.g. from
+   * `cacheCollectionKey`). Reads capture it BEFORE fetching and pass it to
+   * `set()` so a concurrent invalidation can never be hidden by a late write.
+   */
+  versionOf(collection: string): number {
+    return this.colVersions.get(collection) ?? 0;
+  }
+
   get(key: string): unknown | undefined {
     const entry = this.lru.get(key);
     if (!entry) {
@@ -119,24 +140,50 @@ export class QueryCache {
       this.misses++;
       return undefined;
     }
+    // Write-after-invalidate guard: if any source collection was invalidated
+    // after this entry was computed (its stored version lags the current one),
+    // the value is stale-by-arrival — drop it and force a re-fetch.
+    if (entry.versions) {
+      for (const [col, ver] of Object.entries(entry.versions)) {
+        if (this.versionOf(col) !== ver) {
+          this.lru.delete(key);
+          this.misses++;
+          return undefined;
+        }
+      }
+    }
     this.hits++;
     // Each read gets its own copy so the stored entry can't be mutated.
     return this.clone ? cloneDeep(entry.value) : entry.value;
   }
 
-  set(key: string, value: unknown, ttlMs?: number): void {
+  set(
+    key: string,
+    value: unknown,
+    ttlMs?: number,
+    collections?: string[],
+    versions?: Record<string, number>,
+  ): void {
     this.sets++;
     const ttl = ttlMs ?? this.ttlMs;
     const expiresAt = ttl > 0 ? Date.now() + ttl : Infinity;
-    this.lru.set(key, { value, expiresAt });
+    this.lru.set(key, { value, expiresAt, versions });
+    // Primary collection is derived from the key prefix. `collections` lists
+    // ADDITIONAL source collections the entry depends on (e.g. the `$lookup`
+    // join target of a cached aggregation) — registering the key under each
+    // means a write to ANY source drops the entry. Stale cross-index refs left
+    // behind by an invalidation are harmless (`lru.delete` no-ops).
     const sep = key.indexOf(SEP);
-    const collection = sep === -1 ? key : key.slice(0, sep);
-    let keys = this.index.get(collection);
-    if (!keys) {
-      keys = new Set<string>();
-      this.index.set(collection, keys);
+    const primary = sep === -1 ? key : key.slice(0, sep);
+    const collectionKeys = new Set<string>([primary, ...(collections ?? [])]);
+    for (const collection of collectionKeys) {
+      let keys = this.index.get(collection);
+      if (!keys) {
+        keys = new Set<string>();
+        this.index.set(collection, keys);
+      }
+      keys.add(key);
     }
-    keys.add(key);
   }
 
   delete(key: string): void {
@@ -146,6 +193,9 @@ export class QueryCache {
 
   /** Drop every cached entry belonging to a physical collection. */
   invalidateByCollection(collection: string): void {
+    // Bump the collection version BEFORE dropping, so any in-flight read that
+    // started earlier can never re-store a stale value (see `get` guard).
+    this.colVersions.set(collection, (this.colVersions.get(collection) ?? 0) + 1);
     const keys = this.index.get(collection);
     if (!keys) return;
     this.invalidateEvents++;
@@ -155,6 +205,11 @@ export class QueryCache {
 
   clear(): void {
     this.clearEvents++;
+    // Bump every known collection so in-flight reads can't re-store stale
+    // values past a clear() either.
+    for (const collection of this.index.keys()) {
+      this.colVersions.set(collection, (this.colVersions.get(collection) ?? 0) + 1);
+    }
     this.lru.clear();
     this.index.clear();
   }

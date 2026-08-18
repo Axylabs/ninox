@@ -87,7 +87,8 @@ src/
       index.ts                 # makePaginationOps = spread of the two strategies
     aggregation/               # ★ makeAggregationOps
       types.ts                 # GroupByConfig / DateRangeConfig / LookupConfig / PipelineCustomization + ctx
-      helpers.ts               # mergeAggOptions + DATE_PART_FORMATS
+      helpers.ts               # mergeAggOptions + DATE_PART_FORMATS + collectAggSources / isCacheablePipeline
+      cached-read.ts           # createCachedAggregate — write-through cache + dedup for materialized results
       aggregate.ts             # aggregate (callback stages) + pipeline (typed builder)
       group.ts                 # groupBy + dateRangeAnalysis
       text-search.ts           # textSearch ($text / $regex, $facet paged)
@@ -115,7 +116,7 @@ src/
     populate.ts                # makePopulator → batched $in population
 
   cache/                       # ★ perf: caching
-    query-cache.ts             # LRU + TTL + per-collection invalidation
+    query-cache.ts             # LRU + TTL + per-collection (+multi-source) invalidation
     in-flight.ts               # InFlight (concurrent identical query coalescing)
     hot-cache/                 # ★ createHotCache — opt-in LRU read cache (split by strategy)
       types.ts                 # HotCacheOptions / HotQueryConfig / stats types + constants
@@ -130,8 +131,10 @@ src/
 
 tests/                         # bun:test suites (see README)
   pipeline.test.ts             # runtime suite for the typed aggregation pipeline
+  agg-cache.test.ts            # aggregation caching (write-through, joins, bypasses, dedup)
   hot-cache.test.ts            # HotCache unit + standalone ticker + replica fallback
   hot-cache-mongo.test.ts      # HotCache real-Mongo data-integrity / no-side-effects
+  hot-cache-resync.test.ts     # HotCache replica e2e — consumer outage → cache resync
 bench/
   run-bench.ts                 # optimization harness → results/summary.json
   results/summary.json         # latest benchmark output

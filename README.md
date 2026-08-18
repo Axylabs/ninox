@@ -185,7 +185,7 @@ A quick tour — each entry links to the full guide further down.
 | ⚡ | [Cache + dedup](#performance-by-default) | 0 round trips on repeat reads; N identical reads → 1 DB call |
 | 🔗 | [Relations + DataLoader](#relations--populate) | `belongsTo` / `hasMany` / `manyToMany` without N+1 |
 | 📄 | [Pagination](#pagination-offset--keyset) | `$facet` (data + count, 1 round trip) + keyset cursors |
-| 📊 | [Typed aggregation](#typed-aggregation-pipeline) | Chainable `pipeline()` with inferred result types |
+| 📊 | [Typed aggregation](#typed-aggregation-pipeline) | Chainable `pipeline()` with inferred result types — materialized results are cached |
 | 🔍 | [Search & joins](#search--joins) | `$text` / regex search + single-hop `lookupJoin` |
 | 🗺️ | [Geospatial](#geospatial) | `s.geoPoint()` + typed `$geoNear` with distances |
 | 📦 | [Repository layer](#repository-layer) | Optional domain-typed wrapper (`getById`, `create`, `page`, …) |
@@ -243,6 +243,17 @@ Terminals: `.toArray()`, `.first()`, `.cursor()`. The callback
 `match` / `project` / `sort` / `group` / `lookup` / `facet` are checked against
 the schema); reach for `db.pipeline()` when you also want inferred result types.
 See [`examples/10-typed-pipeline.ts`](./examples/10-typed-pipeline.ts).
+
+> ⚡ **Aggregation results are cached too.** `pipeline().toArray()/.first()`,
+> `groupBy`, `dateRangeAnalysis`, `textSearch`, `lookupJoin`, and
+> `paginateFlexible` route through the same write-through `QueryCache` as flat
+> reads (warm reads = **0 driver calls**). Invalidation is write-through and
+> per-source: a `$lookup`/`$unionWith` join is registered under **every** source
+> collection, so a write to any of them drops it. Pipelines that write
+> (`$out`/`$merge`) or are non-deterministic (`$sample`) are never cached; use
+> `{ cache: false }` for other non-deterministic pipelines (`$rand`/`$function`).
+> Live cursors — `aggregate()` and `pipeline().cursor()` — stream and are not
+> cached.
 
 ## Query builder & full CRUD
 
@@ -462,7 +473,10 @@ await runner.scaffold('add_tags'); // create a new NNN_add_tags.ts template
 The **default path is the fast path.** A `QueryCache` and in-flight dedup are
 created and enabled automatically — repeated identical reads become cache hits
 (0 driver calls) and identical concurrent reads coalesce into one driver call.
-Opt out when you need to:
+The same applies to **materializing aggregation results** (`pipeline().toArray()`
+/ `.first()`, `groupBy`, `dateRangeAnalysis`, `textSearch`, `lookupJoin`,
+`paginateFlexible`) — they share the same cache, with invalidation per source
+collection. Opt out when you need to:
 
 ```ts
 // Service-wide: disable caching, dedup, or everything at once.
@@ -571,6 +585,32 @@ Cached results are shared **by reference** (zero clone overhead); if a caller mi
 mutate a result, enable per-query `clone: true` (or `cache: { clone: true }`) so
 each read returns a fresh copy and can't poison the cache.
 
+### Failure semantics — the staleness window
+
+Freshness is best-effort under failure: while the background freshness
+mechanism is down, the HotCache keeps serving from memory, so **low latency can
+hide stale reads**. Here is exactly what happens in the failure cases that
+matter, and how the cache self-heals:
+
+| failure | what happens | recovery |
+| --- | --- | --- |
+| **Stream error / server kill** (network drop, replica failover) | watcher logs `hot cache change stream error`, closes the stream, retries with jittered backoff (1s → 5s) | on **reopen** the bound collection is invalidated once — entries that could have gone stale during the outage are re-fetched on the next read |
+| **Resume-token expiry** (`ChangeStreamHistoryLost` — the oplog pruned past the stream's token) | treated as a *recoverable* error, NOT "unsupported" → same backoff/retry path; the re-opened stream has no resume token and starts from "now" | invalidate-on-reopen drops any entries that missed changes during the gap; the next read re-fetches |
+| **Rollback / `invalidate` events** (collection dropped/renamed) | the stream emits `invalidate` and ends | the loop reconnects and invalidates on reopen |
+| **Consumer downtime** (the process hosting the watcher is down/paused) | writes are NOT observed, so the in-process LRU keeps serving stale values | once the watcher reconnects, invalidate-on-reopen drops the collection's entries and the next read is fresh; a consumer that never reconnects leaves entries stale forever unless `ttlMs`/`refreshIntervalMs` are set |
+
+To **bound the staleness window itself** (not just recover from it):
+
+- set per-query `ttlMs` (expiry) and/or `refreshIntervalMs` (background
+  refresh) — `refreshIntervalMs` also keeps the cache self-updating even if the
+  watcher never comes back;
+- watch `hot.stats()` (per-query `hits` / `misses` / `refreshes` / `loadErrors`)
+  and the `hot cache change stream reconnected` / `hot cache change stream
+  error` warnings — a rising `misses`-to-`hits` ratio or repeated reconnect
+  warnings mean the watcher is unhealthy;
+- in standalone mode, queries with neither `refreshIntervalMs` nor `ttlMs` are
+  served until manually invalidated (see the standalone warning below).
+
 ## Background refresh system
 
 The standalone-mode workhorse behind the HotCache: a single global background
@@ -620,7 +660,7 @@ mapping:
 
 | React Query | ninox |
 | --- | --- |
-| `queryKey` | the cache key — HotCache: **query name + call parameters**; query cache: **collection + filter hash** |
+| `queryKey` | the cache key — HotCache: **query name + call parameters**; query cache: **collection + filter/pipeline hash** |
 | `queryClient.invalidateQueries(['products'])` | `hot.invalidateCollection('products')` or `hot.invalidate('topProducts')` |
 | invalidating one exact entry | `hot.invalidateParams('topProducts', 3)` / `topProducts.invalidate(3)` |
 | `refetchInterval` (background refetch) | the standalone [background ticker](#background-refresh-system) (`refreshIntervalMs`) |
@@ -630,7 +670,8 @@ mapping:
 **What keeps the cache correct, by default:**
 
 1. **Write-through invalidation.** Every ORM insert/update/delete drops that
-   collection's cached reads immediately — like React Query invalidating on a
+   collection's cached reads — and every cached aggregation result that reads it
+   (via its source collections) — immediately, like React Query invalidating on a
    mutation, but you never have to call it.
 2. **External-writer protection.** Writes from other processes, the raw `client`
    escape hatch, or direct DB access can't invalidate on their own. Three ways to

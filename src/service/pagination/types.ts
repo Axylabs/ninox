@@ -5,6 +5,8 @@
  * (in `./index.ts`) share one vocabulary without importing each other's logic.
  */
 import type { Db, Document } from 'mongodb';
+import type { InFlight } from '../../cache/in-flight.ts';
+import type { QueryCache } from '../../cache/query-cache.ts';
 import type { ObjectField } from '../../schema/types.ts';
 import type { DriftMode } from '../../schema/validate-doc/index.ts';
 import type {
@@ -14,6 +16,7 @@ import type {
   ExtractDbNames,
 } from '../../types.ts';
 import type { LoggerLike } from '../../utils/logger.ts';
+import type { CachedAggregate } from '../aggregation/types.ts';
 import type { QueryOptions } from '../query-options.ts';
 import type { DbOpMeta } from '../trace-db-op.ts';
 
@@ -68,6 +71,12 @@ export interface PaginationOpsOptions {
   drift?: DriftMode;
   /** Resolve the declared schema for a logical collection (drift detection). */
   getSchema?: (logical: string) => ObjectField | undefined;
+  /** Shared read cache (`undefined` = caching disabled). */
+  cache?: QueryCache;
+  /** Service default for in-flight read dedup. */
+  dedupeReads: boolean;
+  /** Shared in-flight dedup (`undefined` = no dedup). */
+  inFlight?: InFlight;
 }
 
 /** Shared helpers every pagination strategy needs, bundled by `makePaginationOps`. */
@@ -85,4 +94,11 @@ export interface PaginationCtx<
     trace: <T>(meta: DbOpMeta, fn: () => T | Promise<T>) => Promise<T>;
     meta: (collection: ExtractCollectionNames<TClients, TDb>, op: string) => DbOpMeta;
   };
+  /**
+   * Cached-aggregation runner — used by `paginateFlexible` (a `$facet`
+   * aggregation) for write-through caching + dedup. `paginateCursor` is a
+   * find-based keyset read and stays uncached (its opaque cursor pages are
+   * largely unique, so caching has little to offer).
+   */
+  cachedAggregate: CachedAggregate;
 }

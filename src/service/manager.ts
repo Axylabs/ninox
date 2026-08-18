@@ -126,10 +126,16 @@ export const buildManager = <
     wrapMongoErrors: deps.wrapMongoErrors,
     drift: deps.drift,
     getSchema: (logical) => getDefinition(logical)?.schema,
+    cache: sharedCache,
+    dedupeReads,
+    inFlight,
   });
   const aggregation = makeAggregationOps<TClients, TDb>(handle, dbName, logger, {
     resolveCollectionName,
     wrapMongoErrors: deps.wrapMongoErrors,
+    cache: sharedCache,
+    dedupeReads,
+    inFlight,
   });
   const schema = makeSchemaOps(handle, logger, { resolveCollectionName, getDefinition });
   const transactionOps = makeTransactionOps(client, handle, logger, config, {

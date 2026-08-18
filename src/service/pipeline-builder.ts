@@ -25,6 +25,7 @@ import type {
 import { BadRequest } from '../errors/index.ts';
 import type { FilterInput } from '../shared/filter-types.ts';
 import type { DbClientsDefinition, ExtractCollectionNames, ExtractDbNames } from '../types.ts';
+import type { CachedAggregate } from './aggregation/types.ts';
 import { type CrudOpDeps, defineCrudOp } from './crud-op.ts';
 import type {
   Added,
@@ -44,7 +45,7 @@ import type {
   UnwindSpec,
   Unwound,
 } from './pipeline-types.ts';
-import type { QueryOptions } from './query-options.ts';
+import type { QueryOptions, ResolvedQueryOptions } from './query-options.ts';
 
 /** Execution dependencies wired up by `makeAggregationOps`. */
 export interface PipelineBuilderDeps {
@@ -56,6 +57,12 @@ export interface PipelineBuilderDeps {
     sdk: { session?: ClientSession; maxTimeMS?: number; hint?: Hint },
   ) => AggregateOptions;
   options?: AggregateOptions & QueryOptions;
+  /**
+   * Cached-aggregation runner (write-through cache + dedup). Present on real
+   * builders so `.toArray()` / `.first()` are cached; absent on stage-only
+   * builders (sub-pipelines read via `.raw()` and never execute).
+   */
+  cachedAggregate?: CachedAggregate;
 }
 
 export class PipelineBuilder<
@@ -189,35 +196,57 @@ export class PipelineBuilder<
 
   /** Run the pipeline and return every output document. */
   toArray(): Promise<TDoc[]> {
+    const run = (r: ResolvedQueryOptions) =>
+      this.deps
+        .coll()
+        .aggregate<TDoc>(this.stages, this.deps.mergeDriver(r.driverOpts, r.sdk))
+        .toArray();
+    if (this.deps.cachedAggregate) {
+      return this.deps.cachedAggregate<string, TDoc[]>({
+        collection: this.deps.logical,
+        opName: 'mongo.pipeline',
+        pipeline: this.stages,
+        options: this.deps.options,
+        execute: run,
+      });
+    }
     return defineCrudOp(
       this.deps.crudDeps,
       this.deps.logical,
       'mongo.pipeline',
-      (r) =>
-        this.deps
-          .coll()
-          .aggregate<TDoc>(this.stages, this.deps.mergeDriver(r.driverOpts, r.sdk))
-          .toArray(),
+      run,
       this.deps.options,
     );
   }
 
   /** Run the pipeline and return the first output document (or null). */
   async first(): Promise<TDoc | null> {
+    const run = async (r: ResolvedQueryOptions) => {
+      const cursor = this.deps
+        .coll()
+        .aggregate<TDoc>(this.stages, this.deps.mergeDriver(r.driverOpts, r.sdk));
+      try {
+        return await cursor.tryNext();
+      } finally {
+        await cursor.close();
+      }
+    };
+    // Distinct op name so `first()` never shares a cache entry with
+    // `toArray()` on the same pipeline (they would collide on the key).
+    if (this.deps.cachedAggregate) {
+      return this.deps.cachedAggregate<string, TDoc | null>({
+        collection: this.deps.logical,
+        opName: 'mongo.pipeline.first',
+        pipeline: this.stages,
+        options: this.deps.options,
+        execute: run,
+      });
+    }
     return defineCrudOp(
       this.deps.crudDeps,
       this.deps.logical,
-      'mongo.pipeline',
-      async (r) => {
-        const cursor = this.deps
-          .coll()
-          .aggregate<TDoc>(this.stages, this.deps.mergeDriver(r.driverOpts, r.sdk));
-        try {
-          return await cursor.tryNext();
-        } finally {
-          await cursor.close();
-        }
-      },
+      'mongo.pipeline.first',
+      run,
       this.deps.options,
     );
   }

@@ -12,8 +12,8 @@
  *
  * Uses three services: `ctx` (wrapMongoErrors on, perf off), `raw`
  * (wrapMongoErrors off — explicit opt-out of the new on-by-default behavior),
- * and `perfOn` (cache + dedup on) to prove aggregations bypass the read
- * cache/dedup.
+ * and `perfOn` (cache + dedup on) to prove materializing aggregations ARE
+ * cached + in-flight-deduped (write-through, like reads).
  */
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { type ClientSession, Collection, ObjectId } from 'mongodb';
@@ -671,8 +671,10 @@ maybe('complex multistage aggregation (real MongoDB)', () => {
     expect(one).toBeNull();
   });
 
-  test('aggregations bypass the query cache and in-flight dedup', async () => {
+  test('identical aggregations are cached and deduped (perf on)', async () => {
     const { db } = perfOn; // cache + dedup ON
+    // A repeated identical aggregation is served from the cache → one driver
+    // query total (the first call), zero for the repeat.
     const q0 = await serverQueryCount(db.client);
     await db
       .pipeline('orders')
@@ -683,7 +685,25 @@ maybe('complex multistage aggregation (real MongoDB)', () => {
       .group({ _id: '$status', n: { $sum: 1 } })
       .toArray();
     const delta = (await serverQueryCount(db.client)) - q0;
-    expect(delta).toBe(2); // two separate driver queries — NOT deduped or cached
+    expect(delta).toBe(1); // repeat hit the cache — NOT a second driver query
+
+    // Concurrent identical (cold) aggregations coalesce into ONE driver call.
+    const q1 = await serverQueryCount(db.client);
+    const [a, b] = await Promise.all([
+      db
+        .pipeline('orders')
+        .group({ _id: '$status', n: { $sum: 1 } })
+        .sort({ _id: -1 })
+        .toArray(),
+      db
+        .pipeline('orders')
+        .group({ _id: '$status', n: { $sum: 1 } })
+        .sort({ _id: -1 })
+        .toArray(),
+    ]);
+    const dedupDelta = (await serverQueryCount(db.client)) - q1;
+    expect(a).toEqual(b);
+    expect(dedupDelta).toBe(1); // in-flight dedup coalesced the two
   });
 
   /* --------------------------- errors/guards -------------------------- */

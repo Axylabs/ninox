@@ -142,7 +142,7 @@ jobs:
           mongodb-replica-set: 'rs0'
       - run: bun install --frozen-lockfile
       - name: Run replica-only + hot-cache suites
-        run: bun test tests/hot-cache.test.ts tests/hot-cache-mongo.test.ts tests/cache-invalidation.test.ts
+        run: bun test tests/hot-cache.test.ts tests/hot-cache-mongo.test.ts tests/hot-cache-resync.test.ts tests/cache-invalidation.test.ts
 
   # Publishability gate: build → npm pack → install the tarball in a fresh
   # Node consumer → typecheck (NodeNext) + run against the built dist.

@@ -7,7 +7,6 @@ import type { AggregateOptions, Document } from 'mongodb';
 import { BadRequest } from '../../errors/index.ts';
 import type { FilterInput } from '../../shared/filter-types.ts';
 import type { DbClientsDefinition, ExtractCollectionNames, ExtractDbNames } from '../../types.ts';
-import { defineCrudOp } from '../crud-op.ts';
 import type { QueryOptions } from '../query-options.ts';
 import { DATE_PART_FORMATS } from './helpers.ts';
 import type {
@@ -28,7 +27,7 @@ export const makeGroupOps = <
   type C = ExtractCollectionNames<TClients, TDb>;
   type DocOf2<X extends C> = AggregationDocOf<TClients, TDb, X>;
 
-  const { deps, coll, mergeAggOptions } = ctx;
+  const { coll, mergeAggOptions, cachedAggregate } = ctx;
 
   /** Group documents by a key with optional accumulators/sort/limit (e.g. revenue per status). */
   const groupBy = async <X extends C, TResult extends Document = Document>(
@@ -49,16 +48,16 @@ export const makeGroupOps = <
       ...(config.limit !== undefined ? [{ $limit: config.limit }] : []),
       ...(customization.postPipeline ?? []),
     ];
-    return defineCrudOp(
-      deps,
+    return cachedAggregate<X, TResult[]>({
       collection,
-      'mongo.groupBy',
-      (r) =>
+      opName: 'mongo.groupBy',
+      pipeline,
+      options,
+      execute: (r) =>
         coll(collection)
           .aggregate<TResult>(pipeline, mergeAggOptions(r.driverOpts, r.sdk))
           .toArray(),
-      options,
-    );
+    });
   };
 
   /** Aggregate a metric over date buckets (hour/day/week/month/year) within a range. */
@@ -100,16 +99,16 @@ export const makeGroupOps = <
       ...(analysisConfig.limit !== undefined ? [{ $limit: analysisConfig.limit }] : []),
       ...(customization.postPipeline ?? []),
     ];
-    return defineCrudOp(
-      deps,
+    return cachedAggregate<X, TResult[]>({
       collection,
-      'mongo.dateRangeAnalysis',
-      (r) =>
+      opName: 'mongo.dateRangeAnalysis',
+      pipeline,
+      options,
+      execute: (r) =>
         coll(collection)
           .aggregate<TResult>(pipeline, mergeAggOptions(r.driverOpts, r.sdk))
           .toArray(),
-      options,
-    );
+    });
   };
 
   return { groupBy, dateRangeAnalysis };

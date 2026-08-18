@@ -15,6 +15,7 @@ import type { DbClientsDefinition, ExtractCollectionNames, ExtractDbNames } from
 import type { LoggerLike } from '../../utils/logger.ts';
 import { makeOpDeps } from '../op-deps.ts';
 import { makeAggregateOps } from './aggregate.ts';
+import { createCachedAggregate } from './cached-read.ts';
 import { makeGroupOps } from './group.ts';
 import { mergeAggOptions } from './helpers.ts';
 import { makeLookupJoinOp } from './lookup-join.ts';
@@ -24,7 +25,11 @@ import type { AggregationCtx, AggregationOpsOptions } from './types.ts';
 /**
  * Aggregation ops for one database: `aggregate`, `pipeline`, `groupBy`,
  * `textSearch`, `dateRangeAnalysis`, `lookupJoin`. All collection-name first
- * and schema-typed.
+ * and schema-typed. Materializing ops (`pipeline().toArray()/.first()`,
+ * `groupBy`, `dateRangeAnalysis`, `textSearch`, `lookupJoin`) route through the
+ * shared cached-aggregation runner (`cachedAggregate`) — write-through cache +
+ * in-flight dedup, invalidated per source collection. `aggregate()` and
+ * `pipeline().cursor()` stream live cursors and stay uncached.
  */
 export const makeAggregationOps = <
   TClients extends DbClientsDefinition,
@@ -50,6 +55,7 @@ export const makeAggregationOps = <
     deps,
     coll,
     mergeAggOptions,
+    cachedAggregate: createCachedAggregate<C>({ client, deps, opts, resolve }),
   };
 
   return {

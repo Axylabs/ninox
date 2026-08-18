@@ -100,4 +100,38 @@ maybe('multi-DB cache + dedup isolation', () => {
     expect(cached?.name).toBe('from-B');
     expect(after - afterWrite).toBe(0);
   });
+
+  test('identical aggregations in different DBs do not share cache entries', async () => {
+    const a = service.db.aClient;
+    const b = service.db.bClient;
+    const agg = (m: { pipeline: typeof a.pipeline }) =>
+      m
+        .pipeline('users')
+        .group({ _id: '$email', n: { $sum: 1 } })
+        .sort({ _id: 1 })
+        .toArray();
+
+    // Cache A's aggregation; B's identical one must be a cold miss (different
+    // db-namespaced key) → one driver query for B.
+    await agg(a);
+    await agg(a); // A warm
+    const before = await serverQueryCount(a.client);
+    await agg(a); // A cache hit → 0 driver queries
+    const afterAWarm = await serverQueryCount(a.client);
+    expect(afterAWarm - before).toBe(0);
+
+    const beforeB = await serverQueryCount(a.client);
+    const fromB = await agg(b);
+    const afterB = await serverQueryCount(a.client);
+    expect(afterB - beforeB).toBe(1); // B's aggregation missed (no cross-DB sharing)
+    expect(fromB.length).toBeGreaterThan(0);
+
+    // A write to DB A must NOT invalidate DB B's cached aggregation.
+    await agg(b); // B warm
+    await a.insertOne('users', { email: 'new@x', name: 'from-A3' });
+    const beforeB2 = await serverQueryCount(a.client);
+    await agg(b); // B cache hit → 0 driver queries (A's write didn't touch B)
+    const afterB2 = await serverQueryCount(a.client);
+    expect(afterB2 - beforeB2).toBe(0);
+  });
 });

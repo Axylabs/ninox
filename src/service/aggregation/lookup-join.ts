@@ -6,7 +6,6 @@
 import type { AggregateOptions, Document } from 'mongodb';
 import type { FilterInput } from '../../shared/filter-types.ts';
 import type { DbClientsDefinition, ExtractCollectionNames, ExtractDbNames } from '../../types.ts';
-import { defineCrudOp } from '../crud-op.ts';
 import type { QueryOptions } from '../query-options.ts';
 import type {
   AggregationCtx,
@@ -25,7 +24,7 @@ export const makeLookupJoinOp = <
   type C = ExtractCollectionNames<TClients, TDb>;
   type DocOf2<X extends C> = AggregationDocOf<TClients, TDb, X>;
 
-  const { deps, coll, mergeAggOptions, resolve } = ctx;
+  const { coll, mergeAggOptions, resolve, cachedAggregate } = ctx;
 
   /** Join related docs via `$lookup` + optional `$unwind` (single collection hop). */
   const lookupJoin = async <X extends C, TResult extends Document = DocOf2<X>>(
@@ -54,16 +53,18 @@ export const makeLookupJoinOp = <
         })),
       ...(customization.postPipeline ?? []),
     ];
-    return defineCrudOp(
-      deps,
+    return cachedAggregate<X, TResult[]>({
       collection,
-      'mongo.lookupJoin',
-      (r) =>
+      opName: 'mongo.lookupJoin',
+      pipeline,
+      options,
+      // Writes to any joined collection must invalidate the cached join.
+      sources: lookups.map((l) => l.fromCollection),
+      execute: (r) =>
         coll(collection)
           .aggregate<TResult>(pipeline, mergeAggOptions(r.driverOpts, r.sdk))
           .toArray(),
-      options,
-    );
+    });
   };
 
   return { lookupJoin };

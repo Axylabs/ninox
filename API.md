@@ -193,7 +193,7 @@ Manager ops: `aggregate`, `pipeline`, `groupBy`, `textSearch`, `dateRangeAnalysi
 | `belongsTo` / `hasMany` / `manyToMany` | V | Relation helpers (schema-validated, typed `as` fields). |
 | `RelationDef`, `RelationDefBase`, `BelongsToRelation`, `HasManyRelation`, `ManyToManyRelation`, `ValidRelation`, `JoinedFields` | T | Relation types. |
 | `PopulateOptions` | T | `{ maxBatchSize?, cache?, maxDocs? }` (maxDocs caps per-batch fetch, default 10 000). |
-| `QueryCache` / `QueryCacheOptions` / `QueryCacheStats` | V/T | LRU+TTL read cache with per-collection invalidation; `clone?: boolean`; `stats()` reports hits/misses/evictions/… |
+| `QueryCache` / `QueryCacheOptions` / `QueryCacheStats` | V/T | LRU+TTL read cache with per-collection invalidation; `set(key, value, ttlMs?, collections?, versions?)` registers an entry under additional source collections (aggregation joins) and stores per-collection versions captured at read-start (write-after-invalidate guard — `get()` treats a version-mismatched entry as stale); `versionOf(collection)`; `clone?: boolean`; `stats()` reports hits/misses/evictions/… |
 | `cacheCollectionKey` | V | Compose a cache collection key namespaced by database (multi-DB isolation). |
 | `InFlight` | V | Concurrent identical-query coalescing. |
 | `SyncIndexesResult` | T | `{ created: string[]; dropped: string[] }` from `syncIndexes`. |

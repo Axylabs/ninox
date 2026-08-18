@@ -24,6 +24,28 @@
  * resources. Errors from a loader are never cached, so a transient failure
  * retries on the next read.
  *
+ * ## Failure semantics (the staleness window)
+ *
+ * Freshness is best-effort under failure; the cache keeps serving from memory
+ * while the background freshness mechanism is down, so **low latency can hide
+ * stale reads**. The guarantees:
+ *
+ * - **Replica (change streams)** — the watcher self-heals: any stream error or
+ *   server-side kill (resume-token expiry, rollback, replica failover, dropped
+ *   collection) closes the stream, retries with jittered backoff (1s → 5s),
+ *   and **invalidates the bound collection once on reopen**, so entries that
+ *   could have gone stale during the outage are re-fetched on the next read.
+ *   Until that reopen happens, cached values are served as-is.
+ * - **Standalone (ticker)** — entries are background-refreshed only for
+ *   queries that set `refreshIntervalMs`; a stale value keeps being served
+ *   until the fresh value swaps in. Queries with neither `refreshIntervalMs`
+ *   nor `ttlMs` are served until manually invalidated (unbounded staleness;
+ *   `start()` logs a warning naming them).
+ * - **Bounding the window** — set per-query `ttlMs` and/or `refreshIntervalMs`
+ *   (or `autoRefresh: false` + manual invalidation) and monitor `stats()` plus
+ *   the "change stream reconnected"/"change stream error" warnings to bound how
+ *   long a stale value can be served.
+ *
  * This file is the coordinator: public API + the shared read/fetch pipeline.
  * The two freshness strategies and the size estimator live in sibling modules
  * (`./watcher.ts`, `./ticker.ts`, `./size.ts`) and are injected here, keeping

@@ -4,6 +4,8 @@
  * `./lookup-join.ts`). Type-only plus the `AggregationCtx` interface.
  */
 import type { AggregateOptions, ClientSession, Collection, Db, Document, Hint } from 'mongodb';
+import type { InFlight } from '../../cache/in-flight.ts';
+import type { QueryCache } from '../../cache/query-cache.ts';
 import type {
   DbClientsDefinition,
   ExtractCollectionNames,
@@ -12,6 +14,7 @@ import type {
 } from '../../types.ts';
 import type { LoggerLike } from '../../utils/logger.ts';
 import type { OpDeps } from '../op-deps.ts';
+import type { QueryOptions, ResolvedQueryOptions } from '../query-options.ts';
 
 export interface GroupByConfig {
   /** Group key: a field name or a document of `$`-expressions. */
@@ -66,7 +69,28 @@ export type AggregationDocOf<
 export interface AggregationOpsOptions {
   resolveCollectionName: (logical: string) => string;
   wrapMongoErrors?: boolean;
+  /** Shared read cache (`undefined` = caching disabled). */
+  cache?: QueryCache;
+  /** Service default for in-flight read dedup. */
+  dedupeReads: boolean;
+  /** Shared in-flight dedup (`undefined` = no dedup). */
+  inFlight?: InFlight;
 }
+
+/**
+ * The cached-aggregation runner every materializing op uses (see
+ * `cached-read.ts`). Caches results in the shared `QueryCache` (write-through,
+ * invalidated per source collection) and dedupes identical in-flight calls.
+ */
+export type CachedAggregate = <X extends string, T>(input: {
+  collection: X;
+  opName: string;
+  pipeline: Document[];
+  options?: AggregateOptions & QueryOptions;
+  /** Additional LOGICAL source collections (e.g. `lookupJoin` fromCollections). */
+  sources?: string[];
+  execute: (resolved: ResolvedQueryOptions) => Promise<T>;
+}) => Promise<T>;
 
 /** SDK option subset aggregation stages honor (merged into driver options). */
 export interface AggregationSdkOptions {
@@ -95,6 +119,8 @@ export interface AggregationCtx<
     driverOpts: Record<string, unknown>,
     sdk: AggregationSdkOptions,
   ) => AggregateOptions;
+  /** Cached-aggregation runner (write-through cache + dedup) for materialized ops. */
+  cachedAggregate: CachedAggregate;
 }
 
 /** Pagination subset used by `textSearch`. */

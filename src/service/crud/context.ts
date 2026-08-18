@@ -297,10 +297,14 @@ export const createCrudContext = <
 
     const runOnce = (): Promise<T> => {
       if (useCache && key) {
+        // Capture the collection version BEFORE fetching so a write that lands
+        // mid-flight can never be hidden by a late cache set (see `get` guard).
+        const colKey = cacheCollectionKey(client.databaseName, physical);
+        const versions = { [colKey]: opts.cache!.versionOf(colKey) };
         const hit = opts.cache!.get(key) as T | undefined;
         if (hit !== undefined) return Promise.resolve(hit);
         return fetchAndCheck().then((value) => {
-          opts.cache!.set(key, value);
+          opts.cache!.set(key, value, undefined, undefined, versions);
           return value;
         });
       }

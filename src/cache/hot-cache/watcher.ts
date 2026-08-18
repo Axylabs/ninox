@@ -9,6 +9,30 @@
  * callback. On permanent "not supported" errors the watcher drops the stream
  * and, when every planned stream has failed, tells the host to flip to the
  * standalone ticker. Transient errors retry with jittered backoff.
+ *
+ * ## Failure semantics (the staleness window)
+ *
+ * `watchLoop` is the self-healing consumer. Any stream error or server-side
+ * kill (network drop, replica failover, cursor invalidation) is logged, the
+ * abandoned stream is closed, and the loop reconnects after a jittered backoff
+ * (1s → 5s). On every REOPEN (`backoff > 0`) the bound collection is
+ * invalidated **once**, dropping cached entries so anything written during the
+ * outage is re-fetched on the next read — this "invalidate-on-reopen" is what
+ * restores correctness after:
+ *
+ *   - **Resume-token expiry** — a `ChangeStreamHistoryLost`/invalid-token error.
+ *     It is a recoverable error, NOT "not supported", so it stays in the retry
+ *     path. The re-opened stream has no resume token and starts from "now"; the
+ *     invalidate-on-reopen drops entries that could be stale.
+ *   - **Rollback / `invalidate` events** — a dropped or renamed collection emits
+ *     an `invalidate` event that ends the stream; the loop reconnects and
+ *     invalidates on reopen.
+ *   - **Consumer downtime** — while the consumer is down, writes are NOT
+ *     observed, so the in-process LRU keeps serving stale values (the inherent
+ *     tradeoff: low latency can hide stale reads). Staleness is bounded only by
+ *     reconnect latency + the invalidate-on-reopen, plus any per-query
+ *     `ttlMs`/`refreshIntervalMs`. A consumer that never reconnects leaves
+ *     entries stale forever unless TTL/refresh are set.
  */
 import type { ChangeStream } from 'mongodb';
 import type { LoggerLike } from '../../utils/logger.ts';
@@ -77,7 +101,10 @@ export class WatchCoordinator {
    * Long-lived change-stream consumer for one collection. Each data change
    * invalidates the queries bound to it. On permanent "not supported" errors the
    * watcher is dropped and, if every planned stream failed, the cache falls back
-   * to the standalone ticker. Transient errors retry with backoff.
+   * to the standalone ticker. Transient errors (including resume-token expiry,
+   * rollbacks, and `invalidate` events) retry with backoff and invalidate the
+   * collection on reopen so entries missed during the outage are re-fetched —
+   * see the module doc for the full failure-semantics contract.
    */
   private async watchLoop(key: string, ref: HotCollectionRef): Promise<void> {
     let backoff = 0;
@@ -116,7 +143,12 @@ export class WatchCoordinator {
             // Best-effort: the server drops the cursor on disconnect anyway.
           }
         }
-        if (/only supported on replica sets|not supported|ChangeStream/i.test(message)) {
+        // Classify "unsupported" ONLY by the definitive standalone verdict.
+        // A broad pattern (e.g. `not supported` or `ChangeStream`) can misfire on
+        // replica errors like "change stream history lost" (resume-token expiry)
+        // and wrongly flip the cache to the standalone ticker — those must stay
+        // in the retry path, where the invalidate-on-reopen restores correctness.
+        if (/only supported on replica sets/i.test(message)) {
           this.markStreamFailed(key);
           return;
         }

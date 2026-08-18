@@ -11,7 +11,6 @@ import { normalizePageLimit } from '../../shared/pagination-math.ts';
 import { buildPaginationResult, type PaginationResult } from '../../shared/pagination-result.ts';
 import type { DbClientsDefinition, ExtractCollectionNames, ExtractDbNames } from '../../types.ts';
 import { buildSearchStages, type SearchConfig } from '../aggregation-pipeline.ts';
-import { defineCrudOp } from '../crud-op.ts';
 import type { QueryOptions } from '../query-options.ts';
 import type {
   AggregationCtx,
@@ -30,7 +29,7 @@ export const makeTextSearchOp = <
   type C = ExtractCollectionNames<TClients, TDb>;
   type DocOf2<X extends C> = AggregationDocOf<TClients, TDb, X>;
 
-  const { deps, coll, mergeAggOptions } = ctx;
+  const { coll, mergeAggOptions, cachedAggregate } = ctx;
 
   /** Full-text / regex search with `$facet` pagination and optional score-sorting. */
   const textSearch = async <X extends C>(
@@ -69,11 +68,12 @@ export const makeTextSearchOp = <
         },
       },
     ];
-    return defineCrudOp(
-      deps,
+    return cachedAggregate<X, PaginationResult<DocOf2<X> & { searchScore?: number }>>({
       collection,
-      'mongo.textSearch',
-      async (r) => {
+      opName: 'mongo.textSearch',
+      pipeline,
+      options,
+      execute: async (r) => {
         const rows = await coll(collection)
           .aggregate(pipeline, mergeAggOptions(r.driverOpts, r.sdk))
           .toArray();
@@ -87,8 +87,7 @@ export const makeTextSearchOp = <
         const totalCount = row?.totalCount?.[0]?.count ?? 0;
         return buildPaginationResult(data, totalCount, normalized.page, normalized.limit);
       },
-      options,
-    );
+    });
   };
 
   return { textSearch };

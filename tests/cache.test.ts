@@ -43,6 +43,69 @@ describe('QueryCache', () => {
     expect(cache.get(kOrders)).toBe('o');
   });
 
+  test('set() with extra collections — a write to ANY source invalidates the entry', () => {
+    const cache = new QueryCache();
+    // A join aggregation cached under the primary ('orders') + a source ('customers').
+    const key = cache.key('orders', 'joined-1');
+    cache.set(key, [{ _id: 'o1' }], undefined, ['customers']);
+    expect(cache.get(key)).toEqual([{ _id: 'o1' }]);
+    // A write to the JOINED source drops the entry too.
+    cache.invalidateByCollection('customers');
+    expect(cache.get(key)).toBeUndefined();
+    // And re-caching after invalidation works (stale cross-index refs are inert).
+    cache.set(key, [{ _id: 'o2' }], undefined, ['customers']);
+    expect(cache.get(key)).toEqual([{ _id: 'o2' }]);
+    cache.invalidateByCollection('orders');
+    expect(cache.get(key)).toBeUndefined();
+  });
+
+  test('write-after-invalidate race: a late set with a stale version is never served', () => {
+    const cache = new QueryCache();
+    const key = cache.key('orders', '1');
+    // A read captures the collection version, then a write invalidates while the
+    // read is in-flight, then the read completes and tries to cache its result.
+    const v0 = cache.versionOf('orders');
+    cache.invalidateByCollection('orders'); // write lands mid-flight
+    cache.set(key, 'stale-by-arrival', undefined, undefined, { orders: v0 });
+    // The stale result must NOT be served — the next read re-fetches.
+    expect(cache.get(key)).toBeUndefined();
+    // A fresh set with the CURRENT version is served normally.
+    const v1 = cache.versionOf('orders');
+    cache.set(key, 'fresh', undefined, undefined, { orders: v1 });
+    expect(cache.get(key)).toBe('fresh');
+  });
+
+  test('versions: an entry is stale when ANY source collection changed mid-flight', () => {
+    const cache = new QueryCache();
+    const key = cache.key('orders', 'join-1');
+    const ordersV = cache.versionOf('orders');
+    const customersV = cache.versionOf('customers');
+    // A write to the JOIN source bumps its version while the read is in-flight.
+    cache.invalidateByCollection('customers');
+    cache.set(key, 'stale-join', undefined, ['customers'], {
+      orders: ordersV,
+      customers: customersV,
+    });
+    expect(cache.get(key)).toBeUndefined();
+    // Both sources unchanged → served.
+    const ordersV2 = cache.versionOf('orders');
+    const customersV2 = cache.versionOf('customers');
+    cache.set(key, 'fresh-join', undefined, ['customers'], {
+      orders: ordersV2,
+      customers: customersV2,
+    });
+    expect(cache.get(key)).toBe('fresh-join');
+  });
+
+  test('versions: clear() also invalidates in-flight reads that set afterwards', () => {
+    const cache = new QueryCache();
+    cache.set(cache.key('orders', '1'), 'warm');
+    const v0 = cache.versionOf('orders');
+    cache.clear(); // bumps known collection versions
+    cache.set(cache.key('orders', '1'), 'stale-after-clear', undefined, undefined, { orders: v0 });
+    expect(cache.get(cache.key('orders', '1'))).toBeUndefined();
+  });
+
   test('clear wipes everything', () => {
     const cache = new QueryCache();
     cache.set(cache.key('a', '1'), 1);

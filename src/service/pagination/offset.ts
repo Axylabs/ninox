@@ -10,7 +10,6 @@ import type { FilterInput } from '../../shared/filter-types.ts';
 import { normalizePageLimit } from '../../shared/pagination-math.ts';
 import { buildPaginationResult, type PaginationResult } from '../../shared/pagination-result.ts';
 import type { DbClientsDefinition, ExtractCollectionNames, ExtractDbNames } from '../../types.ts';
-import { defineCrudOp } from '../crud-op.ts';
 import { checkDocsDrift } from '../drift.ts';
 import { resolveDriftMode } from '../query-options.ts';
 import type { PaginationConfig, PaginationCtx, PaginationDocOf } from './types.ts';
@@ -25,7 +24,7 @@ export const makePaginateFlexible = <
   type C = ExtractCollectionNames<TClients, TDb>;
   type DocOf2<X extends C> = PaginationDocOf<TClients, TDb, X>;
 
-  const { client, dbLabel, logger, opts, resolve, deps } = ctx;
+  const { client, dbLabel, logger, opts, resolve, deps, cachedAggregate } = ctx;
 
   const paginateFlexible = async <X extends C>(
     collection: X,
@@ -55,11 +54,12 @@ export const makePaginateFlexible = <
       },
     ];
 
-    return defineCrudOp(
-      deps,
+    return cachedAggregate<X, PaginationResult<DocOf2<X>>>({
       collection,
-      'mongo.paginateFlexible',
-      async (r) => {
+      opName: 'mongo.paginateFlexible',
+      pipeline,
+      options: config.queryOptions,
+      execute: async (r) => {
         const aggOptions = {
           ...(r.driverOpts as Record<string, unknown>),
           session: r.sdk.session,
@@ -89,8 +89,7 @@ export const makePaginateFlexible = <
         );
         return buildPaginationResult(data, totalCount, normalized.page, normalized.limit);
       },
-      config.queryOptions,
-    );
+    });
   };
 
   return { paginateFlexible };

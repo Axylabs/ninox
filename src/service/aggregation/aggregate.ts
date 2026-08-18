@@ -22,7 +22,7 @@ export const makeAggregateOps = <
   type C = ExtractCollectionNames<TClients, TDb>;
   type DocOf2<X extends C> = AggregationDocOf<TClients, TDb, X>;
 
-  const { deps, coll, mergeAggOptions } = ctx;
+  const { deps, coll, mergeAggOptions, cachedAggregate } = ctx;
 
   /** Low-level aggregate: returns a live cursor wrapped in the op pipeline. */
   const aggregate = async <X extends C, TResult extends Document = Document>(
@@ -57,6 +57,7 @@ export const makeAggregateOps = <
       crudDeps: deps as unknown as CrudOpDeps<string>,
       mergeDriver: mergeAggOptions,
       options,
+      cachedAggregate,
     });
 
   return { aggregate, pipeline };
