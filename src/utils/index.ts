@@ -14,3 +14,4 @@ export {
   createCachedFactory,
 } from './memoize.ts';
 export { sleep, sleepJittered, withTimeout } from './timeout.ts';
+export { isPermanentWatchError } from './watch-errors.ts';

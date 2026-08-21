@@ -18,6 +18,7 @@ import type { QueryCache } from '../cache/query-cache.ts';
 import { cacheCollectionKey } from '../cache/query-cache.ts';
 import type { LoggerLike } from '../utils/logger.ts';
 import { sleepJittered } from '../utils/timeout.ts';
+import { isPermanentWatchError } from '../utils/watch-errors.ts';
 
 /** A collection whose external writes should invalidate cached reads. */
 export interface CacheInvalidationRef {
@@ -109,17 +110,18 @@ export class CacheInvalidator {
             // Best-effort — the server drops the cursor on disconnect anyway.
           }
         }
-        if (/only supported on replica sets/i.test(message)) {
-          // Every collection shares the same server, so one unsupported verdict
+        if (isPermanentWatchError(message)) {
+          // Every collection shares the same server, so one permanent verdict
           // applies to all — disable once and stop retrying. NOTE: match ONLY
-          // this definitive standalone error; replica errors like "change stream
-          // history lost" (collection dropped) must stay in the retry path.
+          // definitive permanent errors; replica errors like "change stream
+          // history lost" (collection dropped) or resume-token expiry must stay
+          // in the retry path.
           this.disabled = true;
           if (!this.warnedUnsupported) {
             this.warnedUnsupported = true;
             this.logger.warn?.(
               { collection: ref.collection, error: message },
-              'cacheWatch: change streams are not supported here (standalone?) — the query cache stays write-through only; set cache: { ttlMs } or disable cacheWatch',
+              'cacheWatch: change streams unavailable permanently — the query cache stays write-through only; set cache: { ttlMs } or disable cacheWatch',
             );
           }
           return;
@@ -130,7 +132,7 @@ export class CacheInvalidator {
           'cacheWatch: change stream error, retrying with backoff',
         );
         backoff = Math.min(backoff + 1000, 5000);
-        await sleepJittered(backoff);
+        await sleepJittered(backoff, 1000, true);
       }
     }
   }

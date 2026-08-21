@@ -19,12 +19,24 @@ export const withTimeout = <T>(
   });
 };
 
-/** Sleep helper used by retry backoff. */
-export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+/**
+ * Sleep helper used by retry backoff.
+ *
+ * `unref` (default false) detaches the timer from the event loop, so a
+ * background retry loop never keeps the process alive on its own (the
+ * consumer's server/sockets do that). Watcher backoff passes `unref: true`;
+ * awaited query retries keep the default so a pending call is never dropped.
+ */
+export const sleep = (ms: number, unref = false): Promise<void> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (unref) timer.unref?.();
+  });
 
 /**
  * Sleep for `ms` plus random jitter (0..jitterMs, capped at `ms`) so retry
  * loops don't resynchronize into a thundering herd after a replica failover.
+ * Accepts the same `unref` option as {@link sleep}.
  */
-export const sleepJittered = (ms: number, jitterMs = 1000): Promise<void> =>
-  sleep(ms + Math.floor(Math.random() * Math.min(ms, jitterMs)));
+export const sleepJittered = (ms: number, jitterMs = 1000, unref = false): Promise<void> =>
+  sleep(ms + Math.floor(Math.random() * Math.min(ms, jitterMs)), unref);

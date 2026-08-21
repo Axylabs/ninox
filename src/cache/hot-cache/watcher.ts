@@ -37,6 +37,7 @@
 import type { ChangeStream } from 'mongodb';
 import type { LoggerLike } from '../../utils/logger.ts';
 import { sleepJittered } from '../../utils/timeout.ts';
+import { isPermanentWatchError } from '../../utils/watch-errors.ts';
 import { type HotCollectionRef, type RegisteredQuery, WATCH_SEP } from './types.ts';
 
 export interface WatchHost {
@@ -143,19 +144,20 @@ export class WatchCoordinator {
             // Best-effort: the server drops the cursor on disconnect anyway.
           }
         }
-        // Classify "unsupported" ONLY by the definitive standalone verdict.
-        // A broad pattern (e.g. `not supported` or `ChangeStream`) can misfire on
-        // replica errors like "change stream history lost" (resume-token expiry)
-        // and wrongly flip the cache to the standalone ticker — those must stay
-        // in the retry path, where the invalidate-on-reopen restores correctness.
-        if (/only supported on replica sets/i.test(message)) {
+        // Classify permanent errors ONLY by the definitive standalone + auth
+        // verdicts (see isPermanentWatchError). A broad pattern (e.g. `not
+        // supported` or `ChangeStream`) can misfire on replica errors like
+        // "change stream history lost" (resume-token expiry) and wrongly flip
+        // the cache to the standalone ticker — those must stay in the retry
+        // path, where the invalidate-on-reopen restores correctness.
+        if (isPermanentWatchError(message)) {
           this.markStreamFailed(key);
           return;
         }
       }
       if (this.stopped) return;
       backoff = Math.min(backoff + 1000, 5000);
-      await sleepJittered(backoff);
+      await sleepJittered(backoff, 1000, true);
     }
   }
 
