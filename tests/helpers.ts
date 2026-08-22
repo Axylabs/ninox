@@ -8,6 +8,7 @@
  */
 import { describe } from 'bun:test';
 import { type Db, MongoClient } from 'mongodb';
+import { probeMongoCapabilities } from '../src/capabilities.ts';
 import {
   createMongoService,
   type MongoService,
@@ -40,6 +41,27 @@ export const probe = async (): Promise<boolean> => {
 
 /** `describe` when Mongo is available, `describe.skip` otherwise. */
 export const maybeDescribe = (available: boolean) => (available ? describe : describe.skip);
+
+/**
+ * Detect whether `MONGO_URL` points at a replica set (transactions + change
+ * streams supported). Uses a throwaway connection so suites can gate on this
+ * at module load time — `beforeAll` runs too late to switch `test.skip`.
+ */
+export const probeReplica = async (): Promise<boolean> => {
+  if (!(await probe())) return false;
+  try {
+    const client = new MongoClient(MONGO_URL, { serverSelectionTimeoutMS: 1500 });
+    await client.connect();
+    try {
+      const caps = await probeMongoCapabilities(client);
+      return caps.probed && caps.transactionsSupported;
+    } finally {
+      await client.close().catch(() => {});
+    }
+  } catch {
+    return false;
+  }
+};
 
 /** Current server query counter (`opcounters.query`). */
 export const serverQueryCount = async (db: Db): Promise<number> => {

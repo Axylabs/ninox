@@ -9,20 +9,21 @@
  * the replica test proves external-write invalidation (skipped on standalone).
  */
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { probeMongoCapabilities } from '../src/capabilities.ts';
 import { sleep } from '../src/utils/timeout.ts';
 import {
   captureLogger,
   closeService,
   makeEnterpriseService,
   maybeDescribe,
-  probe as mongoProbe,
   noopLogger,
+  probeReplica,
 } from './helpers.ts';
 
-const maybe = maybeDescribe(await mongoProbe());
+const replica = await probeReplica();
+const maybeReplica = maybeDescribe(replica);
+const maybeStandalone = maybeDescribe(!replica);
 
-maybe('cacheWatch — standalone fallback', () => {
+maybeStandalone('cacheWatch — standalone fallback', () => {
   let ctx: Awaited<ReturnType<typeof makeEnterpriseService>>;
   let logger: ReturnType<typeof captureLogger>;
 
@@ -51,26 +52,21 @@ maybe('cacheWatch — standalone fallback', () => {
   });
 });
 
-maybe('cacheWatch — replica external-write invalidation', () => {
+maybeReplica('cacheWatch — replica external-write invalidation', () => {
   let ctx: Awaited<ReturnType<typeof makeEnterpriseService>>;
-  let replica = false;
 
   beforeAll(async () => {
     ctx = await makeEnterpriseService('ninox_cachewatch_replica', {
       cacheWatch: true,
       logger: noopLogger,
     });
-    const caps = await probeMongoCapabilities(ctx.db.client);
-    replica = caps.transactionsSupported;
   });
 
   afterAll(async () => {
     if (ctx) await closeService(ctx);
   });
 
-  const testReplica = replica ? test : test.skip;
-
-  testReplica('an external write invalidates the cached read', async () => {
+  test('an external write invalidates the cached read', async () => {
     const sku = ctx.seed.productSkus[0];
     const before = await ctx.db.getOne('products', { sku });
     expect(before).not.toBeNull();

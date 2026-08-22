@@ -21,37 +21,31 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import type { Db } from 'mongodb';
 import { createHotCache } from '../src/cache/hot-cache/index.ts';
-import { probeMongoCapabilities } from '../src/capabilities.ts';
 import {
   captureLogger,
   closeService,
   makeEnterpriseService,
   maybeDescribe,
-  probe as mongoProbe,
+  probeReplica,
 } from './helpers.ts';
 
-const maybe = maybeDescribe(await mongoProbe());
+const maybeReplica = maybeDescribe(await probeReplica());
 const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-maybe('HotCache — real Mongo: consumer outage resync (replica)', () => {
+maybeReplica('HotCache — real Mongo: consumer outage resync (replica)', () => {
   let ctx: Awaited<ReturnType<typeof makeEnterpriseService>>;
   let db: Db;
-  let replica = false;
 
   beforeAll(async () => {
     ctx = await makeEnterpriseService('ninox_hotcache_resync', { cache: null });
     db = ctx.db.client;
-    const caps = await probeMongoCapabilities(db);
-    replica = caps.transactionsSupported;
   });
 
   afterAll(async () => {
     if (ctx) await closeService(ctx);
   });
 
-  const testReplica = replica ? test : test.skip;
-
-  testReplica('drops stale entries and resyncs after the change-stream consumer dies', async () => {
+  test('drops stale entries and resyncs after the change-stream consumer dies', async () => {
     const { logger, warns } = captureLogger();
     const hot = createHotCache({ probe: async () => true, logger });
     const q = hot.register('productCount', {

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type ClientSession, type Db, ObjectId } from 'mongodb';
 import { InFlight } from '../src/cache/in-flight.ts';
 import { QueryCache } from '../src/cache/query-cache.ts';
+import { probeMongoCapabilities } from '../src/capabilities.ts';
 import { DataLoader } from '../src/loader/dataloader.ts';
 import { belongsTo, hasMany } from '../src/relation/relation.ts';
 import { s } from '../src/schema/index.ts';
@@ -315,12 +316,33 @@ maybe('automatic optimizations — real ORM, no side effects', () => {
 
     test('reads inside a transaction stay correct', async () => {
       const { insertedId } = await db.insertOne('orders', { userId: new ObjectId(), total: 4 });
-      const values = await db.transaction(async (session: ClientSession | null) =>
-        Promise.all([
-          db.countDocuments('orders', { _id: insertedId }, { session: session ?? undefined }),
-          db.countDocuments('orders', { _id: insertedId }, { session: session ?? undefined }),
-        ]),
-      );
+      const caps = await probeMongoCapabilities(db.client);
+      const values = await (caps.transactionsSupported
+        ? // A real transaction session can only run ONE operation at a time —
+          // MongoDB rejects concurrent ops on a session ("Only servers in a
+          // sharded cluster..."), so reads run sequentially here. Correctness
+          // (values are read from the transaction) is what's being pinned.
+          db.transaction(async (session: ClientSession | null) => {
+            const first = await db.countDocuments(
+              'orders',
+              { _id: insertedId },
+              { session: session ?? undefined },
+            );
+            const second = await db.countDocuments(
+              'orders',
+              { _id: insertedId },
+              { session: session ?? undefined },
+            );
+            return [first, second];
+          })
+        : // Standalone graceful fallback runs the callback with a null session →
+          // no transaction, so concurrent identical reads are safe (deduped).
+          db.transaction(async (session: ClientSession | null) =>
+            Promise.all([
+              db.countDocuments('orders', { _id: insertedId }, { session: session ?? undefined }),
+              db.countDocuments('orders', { _id: insertedId }, { session: session ?? undefined }),
+            ]),
+          ));
       expect(values).toEqual([1, 1]);
     });
 

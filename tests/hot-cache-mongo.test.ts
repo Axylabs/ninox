@@ -12,7 +12,6 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import type { Db } from 'mongodb';
 import { createHotCache } from '../src/cache/hot-cache/index.ts';
-import { probeMongoCapabilities } from '../src/capabilities.ts';
 import { sleep } from '../src/utils/timeout.ts';
 import {
   closeService,
@@ -20,10 +19,12 @@ import {
   maybeDescribe,
   probe as mongoProbe,
   noopLogger,
+  probeReplica,
   serverQueryCount,
 } from './helpers.ts';
 
 const maybe = maybeDescribe(await mongoProbe());
+const maybeReplica = maybeDescribe(await probeReplica());
 
 const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -412,25 +413,20 @@ maybe('HotCache — real Mongo: no side effects & correctness', () => {
 
 /* ------------------------- replica change stream ------------------------- */
 
-maybe('HotCache — real Mongo: replica change-stream integrity', () => {
+maybeReplica('HotCache — real Mongo: replica change-stream integrity', () => {
   let ctx: Awaited<ReturnType<typeof makeEnterpriseService>>;
   let db: Db;
-  let replica = false;
 
   beforeAll(async () => {
     ctx = await makeEnterpriseService('ninox_hotcache_mongo_replica', { cache: null });
     db = ctx.db.client;
-    const caps = await probeMongoCapabilities(db);
-    replica = caps.transactionsSupported;
   });
 
   afterAll(async () => {
     if (ctx) await closeService(ctx);
   });
 
-  const testReplica = replica ? test : test.skip;
-
-  testReplica('a change stream invalidates on external writes and data stays fresh', async () => {
+  test('a change stream invalidates on external writes and data stays fresh', async () => {
     const hot = createHotCache({ probe: async () => true, logger: noopLogger });
     const q = hot.register('replicaCount', {
       watch: [{ db, collection: 'products' }],

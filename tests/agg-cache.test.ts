@@ -319,8 +319,12 @@ maybe('aggregation caching (real MongoDB)', () => {
     });
     const delta = (await serverQueryCount(db.client)) - q0;
     if (caps.transactionsSupported) {
-      // Real session → never cached → both hits hit the DB.
-      expect(delta).toBe(2);
+      // Real session → never cached → both reads hit the DB (≥2 driver
+      // queries). A local replica container may add ambient queries from its
+      // healthcheck `mongosh` (the `admin.atlascli` Atlas-CLI detection
+      // aggregate), so assert a lower bound rather than an exact count — the
+      // point is that neither read was served from the cache.
+      expect(delta).toBeGreaterThanOrEqual(2);
     } else {
       // Standalone graceful fallback runs with a null session → the cache
       // applies, so the second identical read is a cache hit.

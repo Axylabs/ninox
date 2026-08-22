@@ -10,7 +10,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Db } from 'mongodb';
 import { createHotCache } from '../src/cache/hot-cache/index.ts';
-import { probeMongoCapabilities } from '../src/capabilities.ts';
 import { BadRequest } from '../src/errors/index.ts';
 import type { LoggerLike } from '../src/utils/logger.ts';
 import { sleep } from '../src/utils/timeout.ts';
@@ -18,8 +17,8 @@ import {
   closeService,
   makeEnterpriseService,
   maybeDescribe,
-  probe as mongoProbe,
   noopLogger,
+  probeReplica,
 } from './helpers.ts';
 
 describe('HotCache — read-through LRU', () => {
@@ -504,9 +503,11 @@ describe('HotCache — standalone ticker (probe: false)', () => {
 
 /* ------------------------- replica change-stream ------------------------- */
 
-const maybe = maybeDescribe(await mongoProbe());
+const replica = await probeReplica();
+const maybeStandalone = maybeDescribe(!replica);
+const maybeReplica = maybeDescribe(replica);
 
-maybe('HotCache — replica probe fallback', () => {
+maybeStandalone('HotCache — replica probe fallback', () => {
   let ctx: Awaited<ReturnType<typeof makeEnterpriseService>>;
 
   beforeAll(async () => {
@@ -561,26 +562,21 @@ maybe('HotCache — replica probe fallback', () => {
   });
 });
 
-maybe('HotCache — replica change-stream invalidation', () => {
+maybeReplica('HotCache — replica change-stream invalidation', () => {
   let ctx: Awaited<ReturnType<typeof makeEnterpriseService>>;
-  let replica = false;
 
   beforeAll(async () => {
     ctx = await makeEnterpriseService('ninox_hotcache_replica', {
       cache: null,
       perf: false,
     });
-    const caps = await probeMongoCapabilities(ctx.db.client);
-    replica = caps.transactionsSupported;
   });
 
   afterAll(async () => {
     if (ctx) await closeService(ctx);
   });
 
-  const testReplica = replica ? test : test.skip;
-
-  testReplica('a change stream invalidates a watch-bound query on an external write', async () => {
+  test('a change stream invalidates a watch-bound query on an external write', async () => {
     const hot = createHotCache({ probe: async () => true, logger: noopLogger });
     let loads = 0;
     const q = hot.register('productCount', {
