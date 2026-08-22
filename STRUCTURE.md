@@ -10,6 +10,8 @@ src/
   capabilities.ts              # transaction capability probe + env override
   graceful-transaction.ts      # transaction-or-null fallback wrapper
   toolkit.ts                   # createMongoToolkit = service + migrations
+  vendor-ignex-core.d.ts       # ambient declare module '@ignex/core/debug' — optional lazy probe
+                               # (type-only; @ignex/core is intentionally NOT a dependency)
 
   errors/                      # error taxonomy (moved from root errors.ts)
     classes.ts                 # AppError/DomainError/InfraError/BadRequest + ERROR_HTTP_STATUS + guards
@@ -153,6 +155,11 @@ examples/                      # runnable live-Mongo examples (bun run examples/
   18-health-watch.ts           # service.health() + eachDb + watchCollection
   19-text-search.ts            # textSearch ($text/$regex) + lookupJoin
   20-cache-watch.ts            # cacheWatch: change-stream cache invalidation
+scripts/                       # maintainer tooling (not shipped)
+  check-api.ts                 # API.md ↔ src/index.ts surface consistency gate
+  deploy.ts                    # manual release: verify → bump → publish → commit+tag (--dry-run)
+.github/
+  workflows/ci.yml             # typecheck + lint + audit + coverage (≥85%) + examples + replica-set jobs
 ```
 
 ## Data flow

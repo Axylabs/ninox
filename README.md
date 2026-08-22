@@ -195,7 +195,7 @@ A quick tour — each entry links to the full guide further down.
 | 🔄 | [Background refresh](#background-refresh-system) | Self-updating standalone cache — reads never block |
 | 🧹 | [Data invalidation](#data-invalidation-react-query-style) | React Query-style — invalidate by name, params, or collection |
 | 🛡️ | [Error handling](#error-handling) | `BadRequest` / `DomainError` / `InfraError` + HTTP mapping |
-| ✅ | [Validation & drift](#validation) | DB `$jsonSchema` (strict) + opt-in drift detection |
+| ✅ | [Validation & drift](#error-handling) | DB `$jsonSchema` (strict) + opt-in drift detection |
 | 🪝 | [Mongo hooks](#hooks) | `before/after` create/update/delete + `afterRead` |
 | 🩺 | [Health & multi-DB](#operations-health--multi-db) | Per-DB pings, multi-client services, change-stream watch |
 
@@ -465,7 +465,7 @@ const users = defineCollection('users', userSchema, {
 const runner = createMongoMigrationRunner(service, { migrationDir: './migrations' });
 await runner.up();                 // apply pending migrations in numeric order
 await runner.down('001_seed');     // roll back to a target migration
-await runner.scaffold('add_tags'); // create a new NNN_add_tags.ts template
+await runner.create('add_tags');   // create a new NNN_add_tags.ts template
 ```
 
 ## Performance by default
@@ -937,14 +937,11 @@ and a perf-by-default comparison. Run any of them with
 
 ## Performance
 
-| scenario | naive | optimized |
-| --- | --- | --- |
-| populate 100 orders | 17,000 queries (N+1) | **340 queries** (~50× fewer round trips) |
-| paginate | count + find (2 round trips) | `$facet` **1 round trip** |
-| cache hit | 1 driver call | **0 driver calls** |
-| 50 concurrent identical reads | 50 server queries, 17 ms | **1 server query**, 1.5 ms |
+The headline numbers are in the ["ninox vs native MongoDB vs Mongoose" table](#ninox-vs-native-mongodb-vs-mongoose)
+above (N+1 population, concurrent-read dedup, cache hits, aggregation).
 
-Run the full harness (requires local MongoDB, see `.env`):
+Run the full harness (requires local MongoDB, see `.env`) to reproduce or
+extend them:
 
 ```bash
 bun run bench     # → bench/results/summary.json

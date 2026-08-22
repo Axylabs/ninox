@@ -37,6 +37,7 @@
     "test:types": "tsc --noEmit",
     "bench": "bun run bench/run-bench.ts",
     "check:api": "bun run scripts/check-api.ts",
+    "gen:ai-map": "bun run scripts/gen-ai-map.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

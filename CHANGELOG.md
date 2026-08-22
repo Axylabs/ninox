@@ -20,6 +20,42 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `ReadonlySet`. Added `scripts/check-api.ts` (`bun run check:api`) to keep the
   barrel and `API.md` in sync.
 
+## [0.1.3] — 2026-08-18
+
+### Added
+
+- **Cached aggregation** — write-through cache with in-flight dedup for
+  aggregation results (`service/aggregation/cached-read.ts`; `db.aggregate`
+  gains cache options).
+
+### Fixed
+
+- **`cacheWatch`** — stop retrying permanent change-stream errors and unref the
+  watcher backoff, so an unwatchable collection (e.g. a non-replica-set server)
+  no longer keeps the process alive or retries forever.
+
+## [0.1.2] — 2026-08-16
+
+### Fixed
+
+- Repository URL in `package.json` points at the canonical repo.
+
+## [0.1.1] — 2026-08-16
+
+### Added
+
+- Aggregation operations: `aggregate` (callback + typed pipeline),
+  `groupBy` / `dateRangeAnalysis`, `textSearch`, and `lookupJoin`
+  (`service/aggregation/`).
+- Compile-time type-assertion suite for schema-driven type safety
+  (`tests/types.ts`, run by `tsc --noEmit`).
+
+### Changed
+
+- Package references renamed to `@ignex/ninox` across docs, examples, and
+  generated migration templates.
+- Error-module imports streamlined through barrels (`errors/index.ts`).
+
 ## [0.1.0] — 2026-08-16
 
 ### Added
