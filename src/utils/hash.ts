@@ -7,7 +7,15 @@
 type Primitive = string | number | boolean | bigint | null | undefined;
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' && v !== null && !Array.isArray(v);
+  typeof v === 'object' &&
+  v !== null &&
+  !Array.isArray(v) &&
+  !(v instanceof Date) &&
+  !(v instanceof RegExp) &&
+  // Mongo driver ObjectId (and other BSON values with a toHexString marker)
+  // must fall through to `toPrimitive` — treating them as plain objects
+  // would serialize every ObjectId as `{}` and collapse distinct values.
+  typeof (v as { toHexString?: unknown }).toHexString !== 'function';
 
 const toPrimitive = (v: unknown): Primitive => {
   if (v === undefined || v === null) return null;

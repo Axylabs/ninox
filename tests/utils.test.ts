@@ -254,3 +254,27 @@ describe('defineCrudOp (write-retry gating)', () => {
     expect(calls).toBe(2);
   });
 });
+
+describe('stable hashing — non-plain-object values', () => {
+  test('distinct RegExp patterns produce distinct hashes', () => {
+    const f1 = { status: 'published', $or: [{ title: /Notify/i }] };
+    const f2 = { status: 'published', $or: [{ title: /zzz-no-such/i }] };
+    expect(stableHash(f1)).not.toBe(stableHash(f2));
+    expect(stableStringify(f1)).toContain('re:Notify/i');
+  });
+
+  test('distinct Dates produce distinct hashes', () => {
+    const a = { at: new Date('2026-01-01T00:00:00Z') };
+    const b = { at: new Date('2026-01-02T00:00:00Z') };
+    expect(stableHash(a)).not.toBe(stableHash(b));
+    expect(stableStringify(a)).toBe('{"at":"date:1767225600000"}');
+  });
+
+  test('ObjectId vs string vs Date never collapse', async () => {
+    const { ObjectId } = await import('mongodb');
+    const oid = new ObjectId('6a89c95aa878d301b8315d5d');
+    expect(stableHash({ _id: oid })).toBe(stableHash({ _id: oid })); // same value
+    expect(stableHash({ _id: oid })).not.toBe(stableHash({ _id: '6a89c95aa878d301b8315d5d' }));
+    expect(stableHash({ _id: oid })).not.toBe(stableHash({ _id: new Date() }));
+  });
+});
