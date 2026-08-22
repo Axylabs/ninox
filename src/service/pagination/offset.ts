@@ -44,6 +44,7 @@ export const makePaginateFlexible = <
       ...(config.sort && Object.keys(config.sort).length > 0 ? [{ $sort: config.sort }] : []),
       { $skip: normalized.offset },
       { $limit: normalized.limit },
+      ...(config.projection !== undefined ? [{ $project: config.projection }] : []),
       ...(config.postPipeline ?? []),
     ];
 
@@ -79,17 +80,21 @@ export const makePaginateFlexible = <
           | undefined;
         const data = row?.data ?? [];
         const totalCount = row?.totalCount?.[0]?.count ?? 0;
-        checkDocsDrift(
-          {
-            logger,
-            db: dbLabel,
-            drift: resolveDriftMode(config.queryOptions?.drift, opts.drift),
-            ...(opts.getSchema !== undefined ? { getSchema: opts.getSchema } : {}),
-          },
-          String(collection),
-          'mongo.paginateFlexible',
-          data as Document[],
-        );
+        // Projected (lean) pages intentionally lack the collection's full field
+        // set, so the schema-drift check is meaningless for them — skip it.
+        if (config.projection === undefined) {
+          checkDocsDrift(
+            {
+              logger,
+              db: dbLabel,
+              drift: resolveDriftMode(config.queryOptions?.drift, opts.drift),
+              ...(opts.getSchema !== undefined ? { getSchema: opts.getSchema } : {}),
+            },
+            String(collection),
+            'mongo.paginateFlexible',
+            data as Document[],
+          );
+        }
         return buildPaginationResult(data, totalCount, normalized.page, normalized.limit);
       },
     });

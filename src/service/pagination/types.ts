@@ -26,6 +26,14 @@ export interface PaginationConfig {
   sort?: Record<string, 1 | -1>;
   /** Cap on the requested limit (default DEFAULT_MAX_LIMIT=1000). */
   maxLimit?: number;
+  /**
+   * Projection applied to the data facet (e.g. `{ _id: 1, updatedAt: 1 }`).
+   *
+   * Enables lean list reads — only the projected fields cross the wire. When
+   * set, the schema-drift check is skipped for the page (projected docs
+   * intentionally lack the collection's full field set).
+   */
+  projection?: Document;
   /** Stages prepended to the data facet (e.g. extra $match). */
   prePipeline?: Document[];
   /** Stages appended inside the data facet. */

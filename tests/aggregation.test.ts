@@ -569,6 +569,48 @@ maybe('complex multistage aggregation (real MongoDB)', () => {
     }
   });
 
+  test('paginateFlexible: projection option → lean pages (projected fields only)', async () => {
+    const { db } = ctx;
+    const res = await db.paginateFlexible(
+      'orders',
+      { status: 'paid' },
+      {
+        page: 1,
+        limit: 5,
+        sort: { placedAt: -1 },
+        // Lean read — only the projected fields cross the wire (MTS/id lists).
+        projection: { _id: 1, status: 1, placedAt: 1 },
+      },
+    );
+    expect(res.totalCount).toBeGreaterThan(0);
+    expect(res.data.length).toBeGreaterThan(0);
+    expect(res.data.length).toBeLessThanOrEqual(5);
+    for (const d of res.data as Array<Record<string, unknown>>) {
+      expect(Object.keys(d).sort()).toEqual(['_id', 'placedAt', 'status']);
+      expect(d.status).toBe('paid');
+    }
+  });
+
+  test('paginateFlexible: projection with cursor-style id+mts shape (mts lean list)', async () => {
+    const { db } = ctx;
+    const res = await db.paginateFlexible(
+      'orders',
+      {},
+      {
+        page: 1,
+        limit: 3,
+        sort: { placedAt: -1 },
+        projection: { _id: 1, placedAt: 1 },
+      },
+    );
+    expect(res.totalCount).toBeGreaterThan(0);
+    for (const d of res.data as Array<Record<string, unknown>>) {
+      // Only {_id, mtsField} — the exact shape the browser MTS cache-burst
+      // pattern reconciles against.
+      expect(Object.keys(d).sort()).toEqual(['_id', 'placedAt']);
+    }
+  });
+
   test('paginateFlexible: zero matches → empty data, zero total', async () => {
     const { db } = ctx;
     const res = await db.paginateFlexible(
