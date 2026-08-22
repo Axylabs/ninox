@@ -278,3 +278,43 @@ describe('stable hashing — non-plain-object values', () => {
     expect(stableHash({ _id: oid })).not.toBe(stableHash({ _id: new Date() }));
   });
 });
+
+const strip = await import('../src/utils/omit-undefined.ts');
+
+describe('omit-undefined (write payloads never serialize undefined as null)', () => {
+  test('stripUndefinedKeys removes only top-level undefined values, keeps null', () => {
+    const { stripUndefinedKeys } = strip;
+    const doc = { a: 1, b: undefined, c: null, d: 'x', e: { nested: undefined } };
+    const out = stripUndefinedKeys(doc as never) as Record<string, unknown>;
+    expect('a' in out).toBe(true);
+    expect('b' in out).toBe(false);
+    expect('c' in out).toBe(true); // null is meaningful — never stripped
+    expect('d' in out).toBe(true);
+    expect('e' in out).toBe(true); // nested objects are left alone (top-level only)
+  });
+
+  test('stripUndefinedFromUpdate cleans $set/$setOnInsert values and top-level keys', () => {
+    const { stripUndefinedFromUpdate } = strip;
+    const update = {
+      name: undefined,
+      $set: { title: 'x', bio: undefined, $literal: undefined },
+      $setOnInsert: { createdAt: undefined, kind: 'user' },
+      $inc: { views: 1, maybe: undefined }, // other operators are untouched
+    } as never;
+    const out = stripUndefinedFromUpdate(update) as Record<string, unknown>;
+    expect('name' in out).toBe(false);
+    expect((out.$set as Record<string, unknown>).bio).toBeUndefined();
+    expect('bio' in (out.$set as Record<string, unknown>)).toBe(false);
+    expect('$literal' in (out.$set as Record<string, unknown>)).toBe(false);
+    expect((out.$setOnInsert as Record<string, unknown>).kind).toBe('user');
+    expect('createdAt' in (out.$setOnInsert as Record<string, unknown>)).toBe(false);
+    // Non-$set operators keep their semantics (undefined left for the driver).
+    expect((out.$inc as Record<string, unknown>).maybe).toBeUndefined();
+  });
+
+  test('non-object payloads pass through untouched', () => {
+    const { stripUndefinedFromUpdate } = strip;
+    expect(stripUndefinedFromUpdate(null)).toBeNull();
+    expect(stripUndefinedFromUpdate('x' as never)).toBe('x');
+  });
+});

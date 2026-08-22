@@ -435,6 +435,26 @@ maybe('document drift — read-path hardening (real Mongo)', () => {
     expect(driftWarn).toBeDefined();
   });
 
+  test('paginateFlexible with a projection skips the drift check (lean MTS pages)', async () => {
+    // The same drifted doc, but paginated with a `projection` (the MTS
+    // id+mts list pattern): projected pages lack the schema's required fields
+    // and would false-positive — the drift check must be skipped entirely.
+    const before = cap.warns.length;
+    const page = await ctx.db.paginateFlexible(
+      'customers',
+      { email: 'drift@example.com' } as never,
+      {
+        page: 1,
+        limit: 10,
+        projection: { _id: 1, email: 1 },
+      },
+    );
+    expect(page.data.length).toBe(1);
+    expect(Object.keys(page.data[0]).sort()).toEqual(['_id', 'email']);
+    const driftWarn = cap.warns.slice(before).find((w) => w.obj?.op === 'mongo.paginateFlexible');
+    expect(driftWarn).toBeUndefined();
+  });
+
   test('ORM write violating the schema → VALIDATION_FAILED names fields + documentId', async () => {
     // Otherwise-valid doc (createdAt included) + ONE unknown key, so the only
     // violating rule is the top-level additionalProperties:false check.
