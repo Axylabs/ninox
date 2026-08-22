@@ -38,7 +38,7 @@ import type { ChangeStream } from 'mongodb';
 import type { LoggerLike } from '../../utils/logger.ts';
 import { sleepJittered } from '../../utils/timeout.ts';
 import { isPermanentWatchError } from '../../utils/watch-errors.ts';
-import { type HotCollectionRef, type RegisteredQuery, WATCH_SEP } from './types.ts';
+import { type HotCollectionRef, type RegisteredQuery, resolveWatchDb, WATCH_SEP } from './types.ts';
 
 export interface WatchHost {
   /** All registered queries (their `watch` refs drive which streams to open). */
@@ -90,7 +90,7 @@ export class WatchCoordinator {
     const seen = new Set<string>();
     for (const q of this.host.queries().values()) {
       for (const ref of q.config.watch ?? []) {
-        const key = `${ref.db.databaseName}${WATCH_SEP}${ref.collection}`;
+        const key = `${resolveWatchDb(ref).databaseName}${WATCH_SEP}${ref.collection}`;
         if (seen.has(key) || this.streams.has(key)) continue;
         seen.add(key);
         void this.watchLoop(key, ref);
@@ -111,7 +111,7 @@ export class WatchCoordinator {
     let backoff = 0;
     while (!this.stopped) {
       try {
-        const stream = ref.db.collection(ref.collection).watch([]);
+        const stream = resolveWatchDb(ref).collection(ref.collection).watch([]);
         stream.on('error', () => {});
         this.streams.set(key, stream);
         if (backoff > 0) {
@@ -175,7 +175,7 @@ export class WatchCoordinator {
     const set = new Set<string>();
     for (const q of this.host.queries().values()) {
       for (const ref of q.config.watch ?? []) {
-        set.add(`${ref.db.databaseName}${WATCH_SEP}${ref.collection}`);
+        set.add(`${resolveWatchDb(ref).databaseName}${WATCH_SEP}${ref.collection}`);
       }
     }
     return set;

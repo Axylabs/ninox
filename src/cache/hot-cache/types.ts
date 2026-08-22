@@ -13,11 +13,20 @@ export const WATCH_SEP = '\u0000';
 
 /** A collection to watch for invalidation. `collection` is the PHYSICAL name. */
 export interface HotCollectionRef {
-  /** Raw `Db` handle (e.g. `service.db.primaryClient.client`). */
-  db: Db;
+  /**
+   * Raw `Db` handle (e.g. `service.db.primaryClient.client`) — or a lazy
+   * `() => Db` accessor resolved when the watcher starts. The lazy form lets
+   * apps register queries at module scope (before the connection exists) and
+   * only touch the live handle at `start()` time.
+   */
+  db: Db | (() => Db);
   /** Physical collection name whose writes invalidate bound queries. */
   collection: string;
 }
+
+/** Resolve a possibly-lazy collection ref to its live `Db` handle. */
+export const resolveWatchDb = (ref: HotCollectionRef): Db =>
+  typeof ref.db === "function" ? (ref.db as () => Db)() : ref.db;
 
 /** Opt-in query registration. `TArgs` = the parameter tuple, `TResult` = loader result. */
 export interface HotQueryConfig<TArgs extends readonly unknown[], TResult> {

@@ -448,4 +448,29 @@ maybeReplica('HotCache — real Mongo: replica change-stream integrity', () => {
     expect(current).toBe(await db.collection('products').countDocuments()); // integrity
     await hot.stop();
   });
+
+  test('a lazy () => Db watch ref resolves at start time (module-scope registration)', async () => {
+    const hot = createHotCache({ probe: async () => true, logger: noopLogger });
+    // Register BEFORE touching the live handle — the db accessor resolves only
+    // when the watcher starts (the pattern apps use when the connection opens
+    // at boot, after route modules are imported).
+    const q = hot.register('lazyWatchCount', {
+      watch: [{ db: () => db, collection: 'products' }],
+      loader: async () => db.collection('products').countDocuments(),
+    });
+    expect(hot.mode).toBe('unknown'); // nothing probed/resolved yet
+    await hot.start();
+    expect(hot.mode).toBe('replica');
+    const before = await q.get();
+    await insertProbeProduct(db); // external write → change stream via lazy ref
+    let current = before;
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      current = await q.get();
+      if (current === before + 1) break;
+      await sleepMs(50);
+    }
+    expect(current).toBe(before + 1);
+    await hot.stop();
+  });
 });

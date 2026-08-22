@@ -69,6 +69,7 @@ import {
   type HotQueryConfig,
   type HotQueryStats,
   type RegisteredQuery,
+  resolveWatchDb,
   WATCH_SEP,
 } from './types.ts';
 import { WatchCoordinator } from './watcher.ts';
@@ -343,13 +344,13 @@ export class HotCache {
   private defaultProbe = async (): Promise<boolean> => {
     for (const q of this.queries.values()) {
       for (const ref of q.config.watch ?? []) {
-        const caps = await probeMongoCapabilities(ref.db);
+        const caps = await probeMongoCapabilities(resolveWatchDb(ref));
         if (!caps.probed) {
           // A timed-out/failed probe is NOT "confirmed standalone" — falling back
           // to the ticker silently could surprise replica users. Warn loudly so
           // they can pin the behavior with `mode` or a custom `probe`.
           this.logger.warn?.(
-            { db: ref.db.databaseName },
+            { db: resolveWatchDb(ref).databaseName },
             'hot cache: replica probe returned no result (timeout?) — falling back to the standalone ticker; pass `mode` or a custom `probe` to pin the behavior',
           );
           return false;
