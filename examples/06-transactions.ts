@@ -28,12 +28,12 @@ const run = async () => {
     await db.insertOne(
       'orders',
       { userId, total: 9.99, status: 'pending', createdAt: new Date() },
-      { session: session ?? undefined },
+      { ...(session != null ? { session } : {}) },
     );
     await db.insertOne(
       'orders',
       { userId, total: 4.5, status: 'pending', createdAt: new Date() },
-      { session: session ?? undefined },
+      { ...(session != null ? { session } : {}) },
     );
   });
   console.log('orders in transaction:', await db.countDocuments('orders', {}));
@@ -46,7 +46,7 @@ const run = async () => {
       await db.insertOne(
         'orders',
         { userId, total: 1.0, status: 'pending', createdAt: new Date() },
-        { session: session ?? undefined },
+        { ...(session != null ? { session } : {}) },
       );
     },
     { capabilities: caps, urlHint: MONGO_URL },

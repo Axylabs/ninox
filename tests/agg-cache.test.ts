@@ -307,12 +307,12 @@ maybe('aggregation caching (real MongoDB)', () => {
     const q0 = await serverQueryCount(db.client);
     await db.transaction(async (session) => {
       await db
-        .pipeline('orders', { session: session ?? undefined })
+        .pipeline('orders', { ...(session != null ? { session } : {}) })
         .group({ _id: '$status', n: { $sum: 1 } })
         .sort({ _id: 1 })
         .toArray();
       await db
-        .pipeline('orders', { session: session ?? undefined })
+        .pipeline('orders', { ...(session != null ? { session } : {}) })
         .group({ _id: '$status', n: { $sum: 1 } })
         .sort({ _id: 1 })
         .toArray();

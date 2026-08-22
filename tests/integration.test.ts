@@ -172,7 +172,11 @@ maybe('integration (real MongoDB)', () => {
     await withGracefulMongoTransaction(
       { transaction: db.transaction },
       async (session) => {
-        await db.insertOne('orders', { userId, total: 5 }, { session: session ?? undefined });
+        await db.insertOne(
+          'orders',
+          { userId, total: 5 },
+          { ...(session != null ? { session } : {}) },
+        );
       },
       { capabilities: caps, urlHint: MONGO_URL },
     );

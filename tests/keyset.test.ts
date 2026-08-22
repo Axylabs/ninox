@@ -97,7 +97,7 @@ maybe('keyset pagination (real MongoDB)', () => {
         {
           sort,
           limit: 4,
-          after: cursor,
+          ...(cursor !== undefined ? { after: cursor } : {}),
         },
       );
       for (const o of page.data) {

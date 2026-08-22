@@ -644,7 +644,7 @@ maybe('complex multistage aggregation (real MongoDB)', () => {
       await db.transaction(async (session) => {
         gotSession = session;
         const rows = await db
-          .pipeline('orders', { session: session ?? undefined })
+          .pipeline('orders', { ...(session != null ? { session } : {}) })
           .limit(1)
           .toArray();
         expect(rows.length).toBe(1);

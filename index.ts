@@ -151,7 +151,7 @@ const run = async (): Promise<void> => {
       await users.insertOne(
         'orders',
         { userId, total: 9.99, status: 'pending' },
-        { session: session ?? undefined },
+        { ...(session != null ? { session } : {}) },
       );
     },
     { capabilities: caps, urlHint: MONGO_URL },

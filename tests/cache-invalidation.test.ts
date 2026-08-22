@@ -48,7 +48,7 @@ maybeStandalone('cacheWatch — standalone fallback', () => {
     expect(logger.warns.some((w) => w.msg?.includes('cacheWatch'))).toBe(true);
 
     // The ORM cache is unaffected: identical reads are served from the cache.
-    const sku = ctx.seed.productSkus[0];
+    const sku = ctx.seed.productSkus[0]!;
     const first = await ctx.db.getOne('products', { sku });
     const second = await ctx.db.getOne('products', { sku });
     expect(second).toEqual(first);
@@ -70,7 +70,7 @@ maybeReplica('cacheWatch — replica external-write invalidation', () => {
   });
 
   test('an external write invalidates the cached read', async () => {
-    const sku = ctx.seed.productSkus[0];
+    const sku = ctx.seed.productSkus[0]!;
     const before = await ctx.db.getOne('products', { sku });
     expect(before).not.toBeNull();
     // Warm the cache (second identical read is a hit — no extra driver call).

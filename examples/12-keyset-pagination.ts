@@ -37,7 +37,11 @@ const run = async () => {
   let pageNum = 0;
   let hasMore = true;
   while (hasMore && pageNum < 20) {
-    const page = await db.paginateCursor('orders', { userId }, { sort, limit: 5, after: cursor });
+    const page = await db.paginateCursor(
+      'orders',
+      { userId },
+      { sort, limit: 5, ...(cursor !== undefined ? { after: cursor } : {}) },
+    );
     console.log(
       `page ${++pageNum}: totals [${page.data.map((o) => o.total).join(', ')}] ${page.hasMore ? '(more)' : '(last)'}`,
     );

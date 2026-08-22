@@ -112,12 +112,14 @@ export const makeEnterpriseService = async (
     },
     {
       logger: options.logger ?? noopLogger,
-      cache: options.cache,
-      cacheWatch: options.cacheWatch,
-      dedupeReads: options.dedupeReads,
-      perf: options.perf,
-      wrapMongoErrors: options.wrapMongoErrors,
-      drift: options.drift,
+      ...(options.cache !== undefined ? { cache: options.cache } : {}),
+      ...(options.cacheWatch !== undefined ? { cacheWatch: options.cacheWatch } : {}),
+      ...(options.dedupeReads !== undefined ? { dedupeReads: options.dedupeReads } : {}),
+      ...(options.perf !== undefined ? { perf: options.perf } : {}),
+      ...(options.wrapMongoErrors !== undefined
+        ? { wrapMongoErrors: options.wrapMongoErrors }
+        : {}),
+      ...(options.drift !== undefined ? { drift: options.drift } : {}),
     },
   ) as unknown as EnterpriseService;
   await service.makeConnections();
@@ -148,7 +150,10 @@ export const captureLogger = (): {
     warn(a: unknown, b?: string) {
       const obj = typeof a === 'string' ? undefined : (a as Record<string, unknown>);
       const msg = typeof a === 'string' ? a : b;
-      warns.push({ obj, msg });
+      warns.push({
+        ...(obj !== undefined ? { obj } : {}),
+        ...(msg !== undefined ? { msg } : {}),
+      });
     },
     error() {},
   };
