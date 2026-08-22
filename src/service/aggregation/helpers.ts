@@ -15,10 +15,10 @@ export const mergeAggOptions = (
   sdk: AggregationSdkOptions,
 ): AggregateOptions => ({
   ...(driverOpts as AggregateOptions),
-  session: sdk.session,
-  maxTimeMS: sdk.maxTimeMS,
-  hint: sdk.hint,
-  batchSize: sdk.batchSize,
+  ...(sdk.session !== undefined ? { session: sdk.session } : {}),
+  ...(sdk.maxTimeMS !== undefined ? { maxTimeMS: sdk.maxTimeMS } : {}),
+  ...(sdk.hint !== undefined ? { hint: sdk.hint } : {}),
+  ...(sdk.batchSize !== undefined ? { batchSize: sdk.batchSize } : {}),
 });
 
 /** `$dateToString` format per granularity for `dateRangeAnalysis`. */

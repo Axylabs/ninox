@@ -206,7 +206,7 @@ export class PipelineBuilder<
         collection: this.deps.logical,
         opName: 'mongo.pipeline',
         pipeline: this.stages,
-        options: this.deps.options,
+        ...(this.deps.options !== undefined ? { options: this.deps.options } : {}),
         execute: run,
       });
     }
@@ -238,7 +238,7 @@ export class PipelineBuilder<
         collection: this.deps.logical,
         opName: 'mongo.pipeline.first',
         pipeline: this.stages,
-        options: this.deps.options,
+        ...(this.deps.options !== undefined ? { options: this.deps.options } : {}),
         execute: run,
       });
     }

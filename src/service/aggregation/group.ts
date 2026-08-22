@@ -52,7 +52,7 @@ export const makeGroupOps = <
       collection,
       opName: 'mongo.groupBy',
       pipeline,
-      options,
+      ...(options !== undefined ? { options } : {}),
       execute: (r) =>
         coll(collection)
           .aggregate<TResult>(pipeline, mergeAggOptions(r.driverOpts, r.sdk))
@@ -103,7 +103,7 @@ export const makeGroupOps = <
       collection,
       opName: 'mongo.dateRangeAnalysis',
       pipeline,
-      options,
+      ...(options !== undefined ? { options } : {}),
       execute: (r) =>
         coll(collection)
           .aggregate<TResult>(pipeline, mergeAggOptions(r.driverOpts, r.sdk))

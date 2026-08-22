@@ -41,7 +41,10 @@ export const makeTextSearchOp = <
     options?: AggregateOptions & QueryOptions,
   ): Promise<PaginationResult<DocOf2<X> & { searchScore?: number }>> => {
     const normalized = normalizePageLimit(
-      { page: paginationConfig.page, limit: paginationConfig.limit },
+      {
+        ...(paginationConfig.page !== undefined ? { page: paginationConfig.page } : {}),
+        ...(paginationConfig.limit !== undefined ? { limit: paginationConfig.limit } : {}),
+      },
       paginationConfig.maxLimit ?? DEFAULT_MAX_LIMIT,
     );
     const searchStages = buildSearchStages(
@@ -72,7 +75,7 @@ export const makeTextSearchOp = <
       collection,
       opName: 'mongo.textSearch',
       pipeline,
-      options,
+      ...(options !== undefined ? { options } : {}),
       execute: async (r) => {
         const rows = await coll(collection)
           .aggregate(pipeline, mergeAggOptions(r.driverOpts, r.sdk))

@@ -33,7 +33,7 @@ export interface PaginationConfig {
   queryOptions?: QueryOptions;
 }
 
-export interface CursorPaginationConfig<T = Document> {
+export interface CursorPaginationConfig {
   limit?: number;
   /**
    * Sort keys (1 ascending / -1 descending). MUST include a unique tiebreaker —

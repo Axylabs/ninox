@@ -61,9 +61,9 @@ export const makeWatchOps = <
           async (r) => {
             const opts: FindOptions = {
               ...(r.driverOpts as FindOptions),
-              session: r.sdk.session,
-              maxTimeMS: r.sdk.maxTimeMS,
-              hint: r.sdk.hint,
+              ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
+              ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
+              ...(r.sdk.hint !== undefined ? { hint: r.sdk.hint } : {}),
             };
             return execute(opts);
           },

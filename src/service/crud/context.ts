@@ -265,7 +265,12 @@ export const createCrudContext = <
             ? [value as Document]
             : [];
       checkDocsDrift(
-        { logger, db: dbLabel, drift: mode, getSchema: opts.getSchema },
+        {
+          logger,
+          db: dbLabel,
+          drift: mode,
+          ...(opts.getSchema !== undefined ? { getSchema: opts.getSchema } : {}),
+        },
         String(collection),
         opName,
         docs,

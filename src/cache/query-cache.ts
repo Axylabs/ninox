@@ -167,7 +167,11 @@ export class QueryCache {
     this.sets++;
     const ttl = ttlMs ?? this.ttlMs;
     const expiresAt = ttl > 0 ? Date.now() + ttl : Infinity;
-    this.lru.set(key, { value, expiresAt, versions });
+    this.lru.set(key, {
+      value,
+      expiresAt,
+      ...(versions !== undefined ? { versions } : {}),
+    });
     // Primary collection is derived from the key prefix. `collections` lists
     // ADDITIONAL source collections the entry depends on (e.g. the `$lookup`
     // join target of a cached aggregation) — registering the key under each

@@ -41,7 +41,7 @@ export const makePaginateCursor = <
   const paginateCursor = async <X extends C>(
     collection: X,
     baseFilter: FilterInput<DocOf2<X>>,
-    config: CursorPaginationConfig<DocOf2<X>>,
+    config: CursorPaginationConfig,
   ): Promise<CursorPage<DocOf2<X>>> => {
     const sortKeys = Object.entries(config.sort);
     if (sortKeys.length === 0) {
@@ -53,7 +53,7 @@ export const makePaginateCursor = <
       throw new BadRequest('paginateCursor: provide either `after` or `before`, not both');
     }
     const limit = normalizePageLimit(
-      { page: 1, limit: config.limit },
+      { page: 1, ...(config.limit !== undefined ? { limit: config.limit } : {}) },
       config.maxLimit ?? DEFAULT_MAX_LIMIT,
       { limit: DEFAULT_FIND_LIMIT },
     ).limit;
@@ -89,9 +89,9 @@ export const makePaginateCursor = <
       async (r) => {
         const findOpts: FindOptions = {
           ...(r.driverOpts as FindOptions),
-          session: r.sdk.session,
-          maxTimeMS: r.sdk.maxTimeMS,
-          hint: r.sdk.hint,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
+          ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
+          ...(r.sdk.hint !== undefined ? { hint: r.sdk.hint } : {}),
         };
         return client
           .collection<Document>(resolve(String(collection)))
@@ -110,7 +110,7 @@ export const makePaginateCursor = <
         logger,
         db: dbLabel,
         drift: resolveDriftMode(config.queryOptions?.drift, opts.drift),
-        getSchema: opts.getSchema,
+        ...(opts.getSchema !== undefined ? { getSchema: opts.getSchema } : {}),
       },
       String(collection),
       'mongo.paginateCursor',

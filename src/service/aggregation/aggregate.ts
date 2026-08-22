@@ -56,7 +56,7 @@ export const makeAggregateOps = <
       coll: () => coll(collection),
       crudDeps: deps as unknown as CrudOpDeps<string>,
       mergeDriver: mergeAggOptions,
-      options,
+      ...(options !== undefined ? { options } : {}),
       cachedAggregate,
     });
 

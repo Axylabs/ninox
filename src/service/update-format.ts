@@ -1,21 +1,6 @@
 import type { Document, UpdateFilter } from 'mongodb';
 import type { UpdateInput } from './update-types.ts';
 
-const UPDATE_OPERATORS = [
-  '$set',
-  '$unset',
-  '$inc',
-  '$push',
-  '$pull',
-  '$addToSet',
-  '$mul',
-  '$min',
-  '$max',
-  '$rename',
-  '$setOnInsert',
-  '$currentDate',
-] as const;
-
 /** True when `update` uses `$`-operator syntax (vs a plain field patch). */
 export const hasUpdateOperator = (update?: UpdateFilter<Record<string, unknown>>): boolean => {
   if (!update) return false;

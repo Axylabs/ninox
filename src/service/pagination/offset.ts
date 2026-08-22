@@ -4,7 +4,7 @@
  * totalCount: [$count] }`. One network call returns both the page and the total
  * — the ORM's key pagination perf win vs the classic count-then-find pattern.
  */
-import type { Document } from 'mongodb';
+import type { Abortable, AggregateOptions, Document } from 'mongodb';
 import { DEFAULT_MAX_LIMIT } from '../../shared/constants.ts';
 import type { FilterInput } from '../../shared/filter-types.ts';
 import { normalizePageLimit } from '../../shared/pagination-math.ts';
@@ -24,7 +24,7 @@ export const makePaginateFlexible = <
   type C = ExtractCollectionNames<TClients, TDb>;
   type DocOf2<X extends C> = PaginationDocOf<TClients, TDb, X>;
 
-  const { client, dbLabel, logger, opts, resolve, deps, cachedAggregate } = ctx;
+  const { client, dbLabel, logger, opts, resolve, cachedAggregate } = ctx;
 
   const paginateFlexible = async <X extends C>(
     collection: X,
@@ -32,7 +32,10 @@ export const makePaginateFlexible = <
     config: PaginationConfig = {},
   ): Promise<PaginationResult<DocOf2<X>>> => {
     const normalized = normalizePageLimit(
-      { page: config.page, limit: config.limit },
+      {
+        ...(config.page !== undefined ? { page: config.page } : {}),
+        ...(config.limit !== undefined ? { limit: config.limit } : {}),
+      },
       config.maxLimit ?? DEFAULT_MAX_LIMIT,
     );
 
@@ -58,15 +61,15 @@ export const makePaginateFlexible = <
       collection,
       opName: 'mongo.paginateFlexible',
       pipeline,
-      options: config.queryOptions,
+      ...(config.queryOptions !== undefined ? { options: config.queryOptions } : {}),
       execute: async (r) => {
         const aggOptions = {
           ...(r.driverOpts as Record<string, unknown>),
-          session: r.sdk.session,
-          maxTimeMS: r.sdk.maxTimeMS,
-          hint: r.sdk.hint,
-          batchSize: r.sdk.batchSize,
-        };
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
+          ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
+          ...(r.sdk.hint !== undefined ? { hint: r.sdk.hint } : {}),
+          ...(r.sdk.batchSize !== undefined ? { batchSize: r.sdk.batchSize } : {}),
+        } as AggregateOptions & Abortable;
         const rows = await client
           .collection<Document>(resolve(String(collection)))
           .aggregate(pipeline, aggOptions)
@@ -81,7 +84,7 @@ export const makePaginateFlexible = <
             logger,
             db: dbLabel,
             drift: resolveDriftMode(config.queryOptions?.drift, opts.drift),
-            getSchema: opts.getSchema,
+            ...(opts.getSchema !== undefined ? { getSchema: opts.getSchema } : {}),
           },
           String(collection),
           'mongo.paginateFlexible',

@@ -87,7 +87,7 @@ export const makeWriteOps = <
       async (r) => {
         const insertOpts: InsertOneOptions = {
           ...(r.driverOpts as InsertOneOptions),
-          session: r.sdk.session,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
         return coll(collection).insertOne(doc as OptionalUnlessRequiredId<DocOf2<X>>, insertOpts);
       },
@@ -123,7 +123,7 @@ export const makeWriteOps = <
       async (r) => {
         const bulkOpts: BulkWriteOptions = {
           ...(r.driverOpts as BulkWriteOptions),
-          session: r.sdk.session,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
         return coll(collection).insertMany(
           docs as ReadonlyArray<OptionalUnlessRequiredId<DocOf2<X>>>,
@@ -158,7 +158,7 @@ export const makeWriteOps = <
       async (r) => {
         const updateOpts: UpdateOptions = {
           ...(r.driverOpts as UpdateOptions),
-          session: r.sdk.session,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
         return coll(collection).updateOne(
           toDriverFilter(filter),
@@ -190,7 +190,7 @@ export const makeWriteOps = <
       async (r) => {
         const updateOpts: UpdateOptions = {
           ...(r.driverOpts as UpdateOptions),
-          session: r.sdk.session,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
         return coll(collection).updateMany(
           toDriverFilter(filter),
@@ -216,14 +216,16 @@ export const makeWriteOps = <
       collection,
       'mongo.findOneAndUpdate',
       async (r) => {
-        const fOpts: FindOneAndUpdateOptions = {
+        const fOpts = {
           ...(r.driverOpts as FindOneAndUpdateOptions),
-          session: r.sdk.session,
-          maxTimeMS: r.sdk.maxTimeMS,
-          hint: r.sdk.hint as FindOneAndUpdateOptions['hint'],
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
+          ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
+          ...(r.sdk.hint !== undefined
+            ? { hint: r.sdk.hint as FindOneAndUpdateOptions['hint'] }
+            : {}),
           // `after` is the ORM's default, but honor an explicit caller override.
           returnDocument: (r.driverOpts as FindOneAndUpdateOptions).returnDocument ?? 'after',
-        };
+        } as FindOneAndUpdateOptions;
         return coll(collection).findOneAndUpdate(
           toDriverFilter(filter),
           effective as unknown as UpdateFilter<DocOf2<X>>,
@@ -248,14 +250,16 @@ export const makeWriteOps = <
       collection,
       'mongo.findOneAndReplace',
       async (r) => {
-        const fOpts: FindOneAndReplaceOptions = {
+        const fOpts = {
           ...(r.driverOpts as FindOneAndReplaceOptions),
-          session: r.sdk.session,
-          maxTimeMS: r.sdk.maxTimeMS,
-          hint: r.sdk.hint as FindOneAndReplaceOptions['hint'],
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
+          ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
+          ...(r.sdk.hint !== undefined
+            ? { hint: r.sdk.hint as FindOneAndReplaceOptions['hint'] }
+            : {}),
           // `after` is the ORM's default, but honor an explicit caller override.
           returnDocument: (r.driverOpts as FindOneAndReplaceOptions).returnDocument ?? 'after',
-        };
+        } as FindOneAndReplaceOptions;
         return coll(collection).findOneAndReplace(
           toDriverFilter(filter),
           effective,
@@ -281,7 +285,7 @@ export const makeWriteOps = <
       async (r) => {
         const repOpts: ReplaceOptions = {
           ...(r.driverOpts as ReplaceOptions),
-          session: r.sdk.session,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
         return coll(collection).replaceOne(
           toDriverFilter(filter),
@@ -313,7 +317,7 @@ export const makeWriteOps = <
       async (r) => {
         const delOpts: DeleteOptions = {
           ...(r.driverOpts as DeleteOptions),
-          session: r.sdk.session,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
         return coll(collection).deleteOne(toDriverFilter(filter), delOpts);
       },
@@ -339,7 +343,7 @@ export const makeWriteOps = <
       async (r) => {
         const delOpts: DeleteOptions = {
           ...(r.driverOpts as DeleteOptions),
-          session: r.sdk.session,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
         return coll(collection).deleteMany(toDriverFilter(filter), delOpts);
       },
@@ -359,12 +363,14 @@ export const makeWriteOps = <
       collection,
       'mongo.findOneAndDelete',
       async (r) => {
-        const fOpts: FindOneAndDeleteOptions = {
+        const fOpts = {
           ...(r.driverOpts as FindOneAndDeleteOptions),
-          session: r.sdk.session,
-          maxTimeMS: r.sdk.maxTimeMS,
-          hint: r.sdk.hint as FindOneAndDeleteOptions['hint'],
-        };
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
+          ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
+          ...(r.sdk.hint !== undefined
+            ? { hint: r.sdk.hint as FindOneAndDeleteOptions['hint'] }
+            : {}),
+        } as FindOneAndDeleteOptions;
         return coll(collection).findOneAndDelete(
           toDriverFilter(filter),
           fOpts,
@@ -389,7 +395,7 @@ export const makeWriteOps = <
       async (r) => {
         const updateOpts: UpdateOptions = {
           ...(r.driverOpts as UpdateOptions),
-          session: r.sdk.session,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
         return coll(collection).updateOne(
           active,
@@ -417,7 +423,7 @@ export const makeWriteOps = <
       async (r) => {
         const updateOpts: UpdateOptions = {
           ...(r.driverOpts as UpdateOptions),
-          session: r.sdk.session,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
           upsert: true,
         };
         return coll(collection).updateOne(toDriverFilter(filter), formatted, updateOpts);
@@ -456,7 +462,7 @@ export const makeWriteOps = <
       async (r) => {
         const bulkOpts: BulkWriteOptions = {
           ...(r.driverOpts as BulkWriteOptions),
-          session: r.sdk.session,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
         return coll(collection).bulkWrite(writes, bulkOpts);
       },
@@ -483,7 +489,7 @@ export const makeWriteOps = <
       async (r) => {
         const bulkOpts: BulkWriteOptions = {
           ...(r.driverOpts as BulkWriteOptions),
-          session: r.sdk.session,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
         return coll(collection).bulkWrite(operations, bulkOpts);
       },

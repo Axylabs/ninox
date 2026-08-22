@@ -24,7 +24,7 @@ export interface TickerHost {
 
 /** Global standalone refresh ticker. Owns the timer; stops cleanly via `stop()`. */
 export class RefreshTicker {
-  private timer?: ReturnType<typeof setInterval>;
+  private timer: ReturnType<typeof setInterval> | undefined;
   private intervalMs: number;
 
   constructor(

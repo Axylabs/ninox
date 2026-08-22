@@ -113,27 +113,31 @@ export const buildManager = <
   const crud = makeCrudOps<TClients, TDb>(handle, dbName, logger, {
     resolveCollectionName,
     wrapMongoErrors: deps.wrapMongoErrors,
-    cache: sharedCache,
+    ...(sharedCache !== undefined ? { cache: sharedCache } : {}),
     dedupeReads,
     inFlight,
     hooks,
     timestamps,
-    drift: deps.drift,
-    getSchema: (logical) => getDefinition(logical)?.schema,
+    ...(deps.drift !== undefined ? { drift: deps.drift } : {}),
+    ...(getDefinition !== undefined
+      ? { getSchema: (logical: string) => getDefinition(logical)?.schema }
+      : {}),
   });
   const pagination = makePaginationOps<TClients, TDb>(handle, dbName, logger, {
     resolveCollectionName,
     wrapMongoErrors: deps.wrapMongoErrors,
-    drift: deps.drift,
-    getSchema: (logical) => getDefinition(logical)?.schema,
-    cache: sharedCache,
+    ...(deps.drift !== undefined ? { drift: deps.drift } : {}),
+    ...(getDefinition !== undefined
+      ? { getSchema: (logical: string) => getDefinition(logical)?.schema }
+      : {}),
+    ...(sharedCache !== undefined ? { cache: sharedCache } : {}),
     dedupeReads,
     inFlight,
   });
   const aggregation = makeAggregationOps<TClients, TDb>(handle, dbName, logger, {
     resolveCollectionName,
     wrapMongoErrors: deps.wrapMongoErrors,
-    cache: sharedCache,
+    ...(sharedCache !== undefined ? { cache: sharedCache } : {}),
     dedupeReads,
     inFlight,
   });
@@ -148,7 +152,7 @@ export const buildManager = <
       return handle
         .collection<Document>(physical)
         .find(filter, {
-          projection: options?.projection,
+          ...(options?.projection !== undefined ? { projection: options.projection } : {}),
           limit: options?.limit ?? 10_000,
         })
         .toArray();

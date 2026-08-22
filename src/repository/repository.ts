@@ -127,10 +127,7 @@ type RepositoryFor<
   /** `$facet` pagination with totals (one round trip). */
   page(filter: FilterInput<Doc>, config?: PaginationConfig): Promise<PaginationResult<Doc>>;
   /** Keyset/cursor pagination (O(log n), no totals). */
-  pageCursor(
-    filter: FilterInput<Doc>,
-    config: CursorPaginationConfig<Doc>,
-  ): Promise<CursorPage<Doc>>;
+  pageCursor(filter: FilterInput<Doc>, config: CursorPaginationConfig): Promise<CursorPage<Doc>>;
 
   /* aggregation */
   /** Type-safe chained aggregation builder. */

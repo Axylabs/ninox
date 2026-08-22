@@ -98,13 +98,34 @@ export const resolveQueryOptions = <T extends QueryOptions>(
   return {
     maxAttempts,
     retryDelayMs,
-    dedupe,
-    cache,
-    retryWrites,
-    sdk: { session, maxTimeMS, hint, batchSize, drift },
+    ...(dedupe !== undefined ? { dedupe } : {}),
+    ...(cache !== undefined ? { cache } : {}),
+    ...(retryWrites !== undefined ? { retryWrites } : {}),
+    sdk: {
+      ...(session !== undefined ? { session } : {}),
+      ...(maxTimeMS !== undefined ? { maxTimeMS } : {}),
+      ...(hint !== undefined ? { hint } : {}),
+      ...(batchSize !== undefined ? { batchSize } : {}),
+      ...(drift !== undefined ? { drift } : {}),
+    },
     driverOpts: rest as Omit<T, keyof QueryOptions>,
   };
 };
+
+/** Build driver option objects omitting undefined SDK fields (exactOptionalPropertyTypes). */
+export const pickSdkOptions = (sdk: {
+  session?: unknown;
+  maxTimeMS?: unknown;
+  hint?: unknown;
+  batchSize?: unknown;
+  drift?: unknown;
+}): Record<string, unknown> => ({
+  ...(sdk.session !== undefined ? { session: sdk.session } : {}),
+  ...(sdk.maxTimeMS !== undefined ? { maxTimeMS: sdk.maxTimeMS } : {}),
+  ...(sdk.hint !== undefined ? { hint: sdk.hint } : {}),
+  ...(sdk.batchSize !== undefined ? { batchSize: sdk.batchSize } : {}),
+  ...(sdk.drift !== undefined ? { drift: sdk.drift } : {}),
+});
 
 /**
  * Resolve the effective drift mode for a read: per-op override wins, then the

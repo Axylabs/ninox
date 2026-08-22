@@ -86,7 +86,7 @@ export class HotCache {
   private startAttempted = false;
   private stopped = false;
   private disposed = false;
-  private startPromise?: Promise<HotCacheMode>;
+  private startPromise: Promise<HotCacheMode> | undefined;
 
   constructor(options: HotCacheOptions = {}) {
     this.options = options;
@@ -156,7 +156,7 @@ export class HotCache {
       ttlMs: config.ttlMs ?? this.options.defaultTtlMs ?? 0,
       refreshIntervalMs: config.refreshIntervalMs ?? 0,
       clone: config.clone ?? false,
-      maxValueBytes: config.maxValueBytes,
+      ...(config.maxValueBytes !== undefined ? { maxValueBytes: config.maxValueBytes } : {}),
       gen: 0,
       hits: 0,
       misses: 0,

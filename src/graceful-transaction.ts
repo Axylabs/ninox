@@ -28,7 +28,9 @@ export const withGracefulMongoTransaction = async <T>(
 ): Promise<T> => {
   const enabled =
     options.capabilities === undefined ||
-    mongoTransactionsEnabled(options.capabilities, { urlHint: options.urlHint });
+    mongoTransactionsEnabled(options.capabilities, {
+      ...(options.urlHint !== undefined ? { urlHint: options.urlHint } : {}),
+    });
   if (!enabled) return fn(null);
 
   try {

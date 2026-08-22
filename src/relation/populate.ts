@@ -34,15 +34,15 @@ const createForeignKeyLoader = (
   options: PopulateOptions = {},
 ): DataLoader<unknown, Document[]> =>
   new DataLoader<unknown, Document[]>({
-    maxBatchSize: options.maxBatchSize,
-    cache: options.cache,
+    ...(options.maxBatchSize !== undefined ? { maxBatchSize: options.maxBatchSize } : {}),
+    ...(options.cache !== undefined ? { cache: options.cache } : {}),
     keyOf: canonicalKey,
     batch: async (keys) => {
       const docs = await deps.findMany(
         collection,
         { [foreignField]: { $in: keys } },
         {
-          limit: options.maxDocs,
+          ...(options.maxDocs !== undefined ? { limit: options.maxDocs } : {}),
         },
       );
       // Index foreign docs by canonical key value so distinct-but-equal keys

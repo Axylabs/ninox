@@ -57,7 +57,7 @@ export const makeLookupJoinOp = <
       collection,
       opName: 'mongo.lookupJoin',
       pipeline,
-      options,
+      ...(options !== undefined ? { options } : {}),
       // Writes to any joined collection must invalidate the cached join.
       sources: lookups.map((l) => l.fromCollection),
       execute: (r) =>

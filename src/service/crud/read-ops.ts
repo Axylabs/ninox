@@ -43,7 +43,7 @@ export const makeReadOps = <
   type C = ColNames<TClients, TDb>;
   type DocOf2<X extends C> = DocOf<TClients, TDb, X>;
 
-  const { client, opts } = ctx;
+  const { opts } = ctx;
   const { coll, toDriverFilter, read, normalizeFindOptions } = ctx;
 
   /** Fetch a single document by filter, or `null` when none matches. Cached + deduped. */
@@ -62,9 +62,9 @@ export const makeReadOps = <
       async (r) => {
         const opts: FindOptions = {
           ...(r.driverOpts as FindOptions),
-          session: r.sdk.session,
-          maxTimeMS: r.sdk.maxTimeMS,
-          hint: r.sdk.hint,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
+          ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
+          ...(r.sdk.hint !== undefined ? { hint: r.sdk.hint } : {}),
         };
         return coll(collection).findOne(toDriverFilter(f), opts) as unknown as DocOf2<X> | null;
       },
@@ -123,9 +123,9 @@ export const makeReadOps = <
       async (r) => {
         const opts: FindOptions = {
           ...(r.driverOpts as FindOptions),
-          session: r.sdk.session,
-          maxTimeMS: r.sdk.maxTimeMS,
-          hint: r.sdk.hint,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
+          ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
+          ...(r.sdk.hint !== undefined ? { hint: r.sdk.hint } : {}),
         };
         return coll(collection)
           .find(toDriverFilter(filter ?? {}), opts)
@@ -203,9 +203,9 @@ export const makeReadOps = <
       async (r) => {
         const opts: CountDocumentsOptions = {
           ...(r.driverOpts as CountDocumentsOptions),
-          session: r.sdk.session,
-          maxTimeMS: r.sdk.maxTimeMS,
-          hint: r.sdk.hint,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
+          ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
+          ...(r.sdk.hint !== undefined ? { hint: r.sdk.hint } : {}),
         };
         return coll(collection).countDocuments(toDriverFilter(filter ?? {}), opts);
       },
@@ -229,9 +229,9 @@ export const makeReadOps = <
       async (r) => {
         const opts: FindOptions = {
           ...(r.driverOpts as FindOptions),
-          session: r.sdk.session,
-          maxTimeMS: r.sdk.maxTimeMS,
-          hint: r.sdk.hint,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
+          ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
+          ...(r.sdk.hint !== undefined ? { hint: r.sdk.hint } : {}),
         };
         return coll(collection).distinct(
           String(field),
@@ -254,8 +254,8 @@ export const makeReadOps = <
       async (r) => {
         const opts: EstimatedDocumentCountOptions = {
           ...(r.driverOpts as EstimatedDocumentCountOptions),
-          session: r.sdk.session,
-          maxTimeMS: r.sdk.maxTimeMS,
+          ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
+          ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
         };
         return coll(collection).estimatedDocumentCount(opts);
       },
