@@ -25,6 +25,7 @@ import type {
   ExtractDbNames,
 } from '../../types.ts';
 import { stableHash } from '../../utils/hash.ts';
+import { stripUndefinedFromUpdate, stripUndefinedKeys } from '../../utils/omit-undefined.ts';
 import type { LoggerLike } from '../../utils/logger.ts';
 import { defineCrudOp } from '../crud-op.ts';
 import { checkDocsDrift } from '../drift.ts';
@@ -200,8 +201,13 @@ export const createCrudContext = <
   const timestampsFor = (collection: ColNames<TClients, TDb>): CollectionTimestamps | undefined =>
     opts.timestamps?.[String(collection)];
 
-  /** Stamp `createdAt`/`updatedAt` onto a doc being created (in place, only when unset). */
+  /**
+   * Normalize + stamp a doc being created (in place): `undefined` keys are
+   * stripped (TS "absent" must not serialize to `null` under a strict
+   * validator) and `createdAt`/`updatedAt` are set when unset.
+   */
   const stampCreate = (collection: ColNames<TClients, TDb>, doc: Document): void => {
+    stripUndefinedKeys(doc);
     const ts = timestampsFor(collection);
     if (!ts) return;
     const now = new Date();
@@ -209,11 +215,13 @@ export const createCrudContext = <
     if (ts.updatedAt && doc[ts.updatedAt] === undefined) doc[ts.updatedAt] = now;
   };
 
-  /** Merge `updatedAt` into an update payload (plain patch or `$set` operator form). */
+  /** Normalize + merge `updatedAt` into an update payload (plain patch or `$set` operator form). */
   const stampUpdate = <X extends ColNames<TClients, TDb>>(
     collection: X,
     update: UpdateInput<DocOf<TClients, TDb, X>>,
   ): UpdateInput<DocOf<TClients, TDb, X>> => {
+    // `undefined` = absent, never `null` on the wire (see omit-undefined).
+    stripUndefinedFromUpdate(update);
     // Always normalize plain patches into `$set` form (matches `formatUpdateFilter`).
     const formatted = formatUpdateFilter(update) as Document & { $set?: Document };
     const ts = timestampsFor(collection);
@@ -226,6 +234,7 @@ export const createCrudContext = <
 
   /** Return a full replacement with `updatedAt` stamped (findOneAndReplace/replaceOne). */
   const stampReplace = (collection: ColNames<TClients, TDb>, doc: Document): Document => {
+    stripUndefinedKeys(doc);
     const ts = timestampsFor(collection);
     if (!ts?.updatedAt) return doc;
     return { ...doc, [ts.updatedAt]: new Date() };
