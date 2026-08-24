@@ -27,6 +27,11 @@ export const makeGetDbUrl =
  * Open one MongoClient per unique URL (clients sharing a URL share a pool),
  * then build a manager for each logical client. On any failure every client
  * opened *in this call* is closed and rolled back so no partial state remains.
+ *
+ * Connects are SINGLE-FLIGHT per URL: concurrent `makeConnections()` calls
+ * await the same connect promise instead of each constructing a client (the
+ * check-then-act alternative leaked the loser's socket pool forever — it was
+ * registered in neither the pool nor the rollback list).
  */
 export const makeConnectionFactory = <TClients extends DbClientsDefinition>(
   dbClients: TClients,
@@ -35,6 +40,9 @@ export const makeConnectionFactory = <TClients extends DbClientsDefinition>(
   buildManager: (dbKey: string, dbName: string, client: MongoClient) => unknown,
   openedClients: Map<string, MongoClient> = new Map(),
 ) => {
+  /** In-progress connects by URL (cleared once settled). */
+  const connecting = new Map<string, Promise<MongoClient>>();
+
   return async (names?: (keyof TClients & string)[]): Promise<void> => {
     const keys = (names && names.length > 0 ? names : Object.keys(dbClients)) as Array<
       keyof TClients & string
@@ -48,19 +56,35 @@ export const makeConnectionFactory = <TClients extends DbClientsDefinition>(
         const dbUrl = getDbUrl(key);
         let client = openedClients.get(dbUrl);
         if (!client) {
-          client = new MongoClient(dbUrl, {
-            connectTimeoutMS: definition.connectTimeoutMs ?? 10_000,
-            serverSelectionTimeoutMS: definition.connectTimeoutMs ?? 10_000,
-            ...(definition.readPreference && { readPreference: definition.readPreference }),
-            ...(definition.readConcern && { readConcern: definition.readConcern }),
-            ...(definition.writeConcern && { writeConcern: definition.writeConcern }),
-          });
-          // Swallow driver-level 'error' events (e.g. connection interruption
-          // during close) so they never surface as unhandled rejections.
-          client.on('error', () => {});
-          openedClients.set(dbUrl, client);
-          openedThisCall.push({ url: dbUrl, client });
-          await client.connect();
+          const inflight = connecting.get(dbUrl);
+          if (inflight) {
+            // Another concurrent call is already connecting this URL — share it.
+            client = await inflight;
+          } else {
+            const attempt = (async () => {
+              const c = new MongoClient(dbUrl, {
+                connectTimeoutMS: definition.connectTimeoutMs ?? 10_000,
+                serverSelectionTimeoutMS: definition.connectTimeoutMs ?? 10_000,
+                ...(definition.readPreference && { readPreference: definition.readPreference }),
+                ...(definition.readConcern && { readConcern: definition.readConcern }),
+                ...(definition.writeConcern && { writeConcern: definition.writeConcern }),
+              });
+              // Swallow driver-level 'error' events (e.g. connection
+              // interruption during close) so they never surface as unhandled
+              // rejections. Topology failures still reject in-flight ops.
+              c.on('error', () => {});
+              await c.connect();
+              return c;
+            })();
+            connecting.set(dbUrl, attempt);
+            try {
+              client = await attempt;
+              openedClients.set(dbUrl, client);
+              openedThisCall.push({ url: dbUrl, client });
+            } finally {
+              connecting.delete(dbUrl);
+            }
+          }
         }
         const dbKey = `${key}Client`;
         db[dbKey] = buildManager(key, definition.name, client);

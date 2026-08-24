@@ -13,9 +13,14 @@ export class InFlight {
   run<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const existing = this.pending.get(key);
     if (existing) return existing as Promise<T>;
-    const promise = fn().finally(() => {
-      this.pending.delete(key);
-    });
+    // Promise.resolve().then(fn) so a synchronous throw from `fn` still
+    // becomes a rejected Promise (and reaches joiners) instead of escaping
+    // `run()` as a sync exception and skipping the map registration.
+    const promise = Promise.resolve()
+      .then(fn)
+      .finally(() => {
+        this.pending.delete(key);
+      });
     this.pending.set(key, promise);
     return promise;
   }

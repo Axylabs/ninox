@@ -8,7 +8,7 @@
  * without importing the orchestrator — breaking the import cycle and keeping
  * every field-kind rule small, isolated, and independently readable.
  */
-import { Decimal128, type Document, ObjectId } from 'mongodb';
+import { Decimal128, type Document, Long, ObjectId } from 'mongodb';
 import type {
   ArrayField,
   DecimalField,
@@ -43,6 +43,29 @@ export type FieldValidator = (
   issues: DriftIssue[],
 ) => void;
 
+/**
+ * Compiled-pattern cache: `s.string({ pattern })` is compiled once per schema
+ * field object instead of once per validated VALUE (the old
+ * `new RegExp(f.pattern)` ran on every string of every document — measurable
+ * GC pressure under `findMany` drift checks). Keyed weakly so schemas are not
+ * kept alive by the cache.
+ */
+const patternCache = new WeakMap<object, RegExp>();
+
+const compiledPattern = (field: StringField): RegExp | undefined => {
+  if (!field.pattern) return undefined;
+  const cached = patternCache.get(field);
+  if (cached) return cached;
+  try {
+    const re = new RegExp(field.pattern);
+    patternCache.set(field, re);
+    return re;
+  } catch {
+    // Malformed pattern — nothing to enforce at runtime.
+    return undefined;
+  }
+};
+
 const stringValidator: FieldValidator = (_deps, field, value, path, issues) => {
   const f = field as StringField;
   if (typeof value !== 'string') {
@@ -67,20 +90,15 @@ const stringValidator: FieldValidator = (_deps, field, value, path, issues) => {
       `Length ${value.length} > ${f.maxLength}`,
     );
   }
-  if (f.pattern) {
-    try {
-      if (!new RegExp(f.pattern).test(value)) {
-        push(
-          issues,
-          path,
-          'constraint',
-          `string(pattern ${f.pattern})`,
-          `"${value}" does not match pattern`,
-        );
-      }
-    } catch {
-      // Malformed pattern — nothing to enforce at runtime.
-    }
+  const pattern = compiledPattern(f);
+  if (pattern && !pattern.test(value)) {
+    push(
+      issues,
+      path,
+      'constraint',
+      `string(pattern ${f.pattern})`,
+      `"${value}" does not match pattern`,
+    );
   }
 };
 
@@ -99,11 +117,14 @@ const numberValidator: FieldValidator = (_deps, field, value, path, issues) => {
 
 const floatingValidator: FieldValidator = (_deps, field, value, path, issues) => {
   const f = field as DoubleField | LongField | DecimalField;
+  // `long` accepts both safe-range JS numbers and driver `Long` instances —
+  // int64 values above 2^53 deserialized by another client come back as Long,
+  // and flagging legitimately-stored large values as drift is a false positive.
   const ok =
     f.kind === 'decimal'
       ? value instanceof Decimal128
       : f.kind === 'long'
-        ? typeof value === 'number' && Number.isInteger(value)
+        ? (typeof value === 'number' && Number.isInteger(value)) || value instanceof Long
         : typeof value === 'number' && !Number.isNaN(value);
   if (!ok) {
     push(issues, path, 'type', f.kind, `Expected ${f.kind}, got ${describeValue(value)}`);

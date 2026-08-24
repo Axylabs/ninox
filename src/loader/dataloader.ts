@@ -13,6 +13,7 @@
  *    runs a fresh batch instead of re-surfacing the same rejection
  *  - `maxBatchSize` splits oversized batches
  */
+import { stableStringify } from '../utils/hash.ts';
 
 export interface DataLoaderOptions<Key, Value> {
   /** Resolve a batch of keys → one Map. Keys that have no row should be absent. */
@@ -119,7 +120,12 @@ export class DataLoader<Key, Value> {
   }
 
   private async flush(): Promise<void> {
-    if (this.flushing) return;
+    if (this.flushing) {
+      // A flush is already running and drained the queue slice; reset the
+      // flag so its `finally` re-schedules us for the leftover items.
+      this.scheduled = false;
+      return;
+    }
     if (this.queue.length === 0) {
       this.scheduled = false;
       return;
@@ -127,6 +133,11 @@ export class DataLoader<Key, Value> {
 
     const items = this.queue.splice(0, this.maxBatchSize);
     this.flushing = true;
+    // Re-open the scheduling window BEFORE the batch runs: loads arriving
+    // mid-flight then open a fresh `maxBatchDelayMs` window instead of never
+    // being scheduled (the old code kept `scheduled` true for the whole
+    // batch, collapsing the configured coalescing window after the first one).
+    this.scheduled = false;
     try {
       const resultMap = await this.batchFn(items.map((item) => item.key));
       for (const item of items) {
@@ -144,12 +155,10 @@ export class DataLoader<Key, Value> {
       }
     } finally {
       this.flushing = false;
-      this.scheduled = false;
-      if (this.queue.length > 0) {
-        this.scheduled = true;
-        queueMicrotask(() => {
-          void this.flush();
-        });
+      // Leftover keys (maxBatchSize split / arrivals during the batch) go
+      // through the normal scheduler so they honor the configured window.
+      if (!this.scheduled && this.queue.length > 0) {
+        this.scheduleFlush();
       }
     }
   }
@@ -162,6 +171,9 @@ export const canonicalKey = (value: unknown): string => {
     const anyValue = value as { toHexString?: () => string };
     if (typeof anyValue.toHexString === 'function') return `oid:${anyValue.toHexString()}`;
     if (value instanceof Date) return `date:${value.getTime()}`;
+    // Plain objects: deterministic serialization — `String(value)` collapsed
+    // every object to "[object Object]", making distinct keys collide.
+    return `obj:${stableStringify(value)}`;
   }
   return `${typeof value}:${String(value)}`;
 };

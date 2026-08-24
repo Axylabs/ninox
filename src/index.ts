@@ -35,6 +35,7 @@ export {
   isMappedMongoError,
   isMongoDuplicateKeyError,
   isMongoTransientError,
+  isTransactionUnsupportedError,
   mapMongoDriverError,
   serializeError,
   TRANSIENT_MONGO_ERROR_CODES,

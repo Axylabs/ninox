@@ -391,7 +391,7 @@ maybe('automatic optimizations — real ORM, no side effects', () => {
   });
 
   describe('populate (real ORM) — no side effects', () => {
-    test('belongsTo attaches only the `as` field; source fields untouched', async () => {
+    test('belongsTo attaches only the `as` field; source docs are copied, not mutated', async () => {
       const { insertedId: userId } = await db.insertOne('users', makeUser('pop@x.y'));
       const { insertedId: orderId } = await db.insertOne('orders', { userId, total: 5 });
       const orders = await db.findMany('orders', { _id: orderId });
@@ -401,10 +401,24 @@ maybe('automatic optimizations — real ORM, no side effects', () => {
         belongsTo({ collection: 'users', localField: 'userId', as: 'customer' }),
       ]);
 
-      expect(populated).toBe(orders); // same array, mutated in place
+      // Copy-on-write: populate returns fresh copies so the source documents
+      // (which may be shared cache entries) are never polluted with joins.
+      expect(populated).not.toBe(orders);
       expect(populated[0].customer).toMatchObject({ _id: userId });
       const { customer: _c, ...rest } = { ...populated[0] };
       expect(rest).toEqual(snapshot); // nothing but `as` changed
+      expect(orders[0]).toEqual(snapshot); // original untouched
+    });
+
+    test('populate never mutates a shared cache entry (cache-poisoning guard)', async () => {
+      const { insertedId: userId } = await db.insertOne('users', makeUser('poison@x.y'));
+      const { insertedId: orderId } = await db.insertOne('orders', { userId, total: 5 });
+      const first = await db.findMany('orders', { _id: orderId }); // warms the cache
+      await db.populate(first, [
+        belongsTo({ collection: 'users', localField: 'userId', as: 'customer' }),
+      ]);
+      const second = await db.findMany('orders', { _id: orderId }); // served from cache
+      expect((second[0] as Record<string, unknown>).customer).toBeUndefined();
     });
 
     test('a second populate call re-queries — no stale joins across calls', async () => {
@@ -412,16 +426,16 @@ maybe('automatic optimizations — real ORM, no side effects', () => {
       const { insertedId: orderId } = await db.insertOne('orders', { userId, total: 5 });
       const orders = await db.findMany('orders', { _id: orderId });
 
-      await db.populate(orders, [
+      const first = await db.populate(orders, [
         belongsTo({ collection: 'users', localField: 'userId', as: 'customer' }),
       ]);
-      expect(orders[0].customer.email).toBe('fresh@x.y');
+      expect(first[0].customer.email).toBe('fresh@x.y');
 
       await raw.collection('users').updateOne({ _id: userId }, { $set: { email: 'changed@x.y' } });
-      await db.populate(orders, [
+      const second = await db.populate(orders, [
         belongsTo({ collection: 'users', localField: 'userId', as: 'customer' }),
       ]);
-      expect(orders[0].customer.email).toBe('changed@x.y'); // fresh query per populate call
+      expect(second[0].customer.email).toBe('changed@x.y'); // fresh query per populate call
     });
 
     test('hasMany attaches an array per source doc', async () => {
@@ -431,10 +445,10 @@ maybe('automatic optimizations — real ORM, no side effects', () => {
         { userId, total: 2 },
       ]);
       const users = await db.findMany('users', { _id: userId });
-      await db.populate(users, [
+      const populated = await db.populate(users, [
         hasMany({ collection: 'orders', localField: '_id', foreignField: 'userId', as: 'orders' }),
       ]);
-      expect(users[0].orders).toHaveLength(2);
+      expect(populated[0].orders).toHaveLength(2);
     });
   });
 
@@ -454,7 +468,7 @@ maybe('automatic optimizations — real ORM, no side effects', () => {
         { page: 1, limit: 1, sort: { total: -1 } },
       );
       const orders = await manager.findMany('orders', { userId: insertedId });
-      await manager.populate(orders, [
+      const populatedOrders = await manager.populate(orders, [
         belongsTo({ collection: 'users', localField: 'userId', as: 'customer' }),
       ]);
       return {
@@ -463,8 +477,8 @@ maybe('automatic optimizations — real ORM, no side effects', () => {
         pageTotal: page.totalCount,
         pageLen: page.data.length,
         topTotal: page.data[0]?.total,
-        customerEmail: orders[0]?.customer?.email,
-        orderKeys: Object.keys(orders[0] ?? {}).sort(),
+        customerEmail: populatedOrders[0]?.customer?.email,
+        orderKeys: Object.keys(populatedOrders[0] ?? {}).sort(),
       };
     };
 

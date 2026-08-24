@@ -81,9 +81,39 @@ const resolveItemName = (item: NamedCollection): string =>
     ? ((item as NamedCollectionDefinition).schema as NamedObjectField).name
     : (item as NamedObjectField).name;
 
+/**
+ * Fail fast when `timestamps: true | {...}` names fields the schema does not
+ * declare. Under strict validation (`additionalProperties: false`, the
+ * default) an undeclared timestamp field gets EVERY insert/update rejected
+ * server-side with an opaque `DocumentValidationFailure` — far from this
+ * misconfiguration site. Throwing here turns that into a one-line fix.
+ */
+const assertTimestampsDeclared = (
+  name: string,
+  schema: ObjectField,
+  timestamps: CollectionTimestamps | boolean,
+): void => {
+  const ts = typeof timestamps === 'boolean' ? {} : timestamps;
+  const createdAt = ts.createdAt ?? 'createdAt';
+  const updatedAt = ts.updatedAt ?? 'updatedAt';
+  const properties = schema.properties ?? {};
+  for (const field of [createdAt, updatedAt]) {
+    if (!(field in properties)) {
+      throw new Error(
+        `defineCollections: "${name}" enables timestamps but its schema does not declare the ` +
+          `field "${field}". Add \`${field}: s.date().optional()\` to the schema (or adjust ` +
+          `\`timestamps\`) — otherwise strict validation rejects every stamped write.`,
+      );
+    }
+  }
+};
+
 const resolveItemValue = (item: NamedCollection): CollectionLike => {
   if ('schema' in item) {
     const def = item as NamedCollectionDefinition;
+    if (def.timestamps !== undefined) {
+      assertTimestampsDeclared(def.name, def.schema, def.timestamps);
+    }
     return {
       schema: def.schema,
       ...(def.indexes ? { indexes: def.indexes } : {}),
@@ -109,6 +139,9 @@ export const defineCollection = <N extends string, S extends ObjectField>(
   } = {},
 ): NamedCollectionDefinition<N, S> => {
   const namedSchema = { ...(schema as object), name } as S & { name: N };
+  if (extras.timestamps !== undefined) {
+    assertTimestampsDeclared(name, schema, extras.timestamps);
+  }
   return {
     name,
     schema: namedSchema,

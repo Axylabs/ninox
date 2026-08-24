@@ -9,6 +9,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Db } from 'mongodb';
+import { ObjectId } from 'mongodb';
 import { createHotCache } from '../src/cache/hot-cache/index.ts';
 import { BadRequest } from '../src/errors/index.ts';
 import type { LoggerLike } from '../src/utils/logger.ts';
@@ -498,6 +499,235 @@ describe('HotCache — standalone ticker (probe: false)', () => {
     await sleep(80); // the ticker runs, but this query has no refreshIntervalMs → no refetch
     expect(await q.get()).toBe(1);
     expect(loads).toBe(1);
+    await hot.stop();
+  });
+});
+
+describe('HotCache — id-targeted invalidation (idsOf + invalidateIds)', () => {
+  const fakeDb = { databaseName: 'app' } as unknown as Db;
+
+  test('invalidateIds drops only entries whose idsOf includes the changed id', async () => {
+    const hot = createHotCache();
+    let loads = 0;
+    const q = hot.register('userById', {
+      watch: [{ db: fakeDb, collection: 'users', idsOf: (id: string) => [id] }],
+      loader: async (id: string) => {
+        loads++;
+        return `u:${id}`;
+      },
+    });
+    await q.get('a');
+    await q.get('b');
+    expect(loads).toBe(2);
+    hot.invalidateIds('users', ['a']); // only `a`'s document changed
+    expect(await q.get('a')).toBe('u:a'); // dropped → reloaded
+    expect(loads).toBe(3);
+    expect(await q.get('b')).toBe('u:b'); // sibling entry stays warm
+    expect(loads).toBe(3);
+  });
+
+  test('idsOf can map one entry to a GROUP of documents (team → member ids)', async () => {
+    const teams: Record<string, string[]> = { eng: ['u1', 'u2'], ops: ['u3'] };
+    const hot = createHotCache();
+    let loads = 0;
+    const q = hot.register('teamMembers', {
+      watch: [{ db: fakeDb, collection: 'users', idsOf: (team: string) => teams[team] ?? [] }],
+      loader: async (team: string) => {
+        loads++;
+        return [...(teams[team] ?? [])];
+      },
+    });
+    await q.get('eng');
+    await q.get('ops');
+    expect(loads).toBe(2);
+    hot.invalidateIds('users', ['u2']); // one member of the group changed
+    expect(await q.get('eng')).toEqual(['u1', 'u2']); // recomputed
+    expect(loads).toBe(3);
+    expect(await q.get('ops')).toEqual(['u3']); // unrelated group untouched
+    expect(loads).toBe(3);
+  });
+
+  test('an empty extractor (entry depends on no specific doc) is kept by targeted changes', async () => {
+    const hot = createHotCache();
+    let loads = 0;
+    const q = hot.register('globalConfig', {
+      watch: [{ db: fakeDb, collection: 'config', idsOf: () => [] }],
+      loader: async () => {
+        loads++;
+        return 'cfg';
+      },
+    });
+    await q.get();
+    hot.invalidateIds('config', ['anything']);
+    expect(await q.get()).toBe('cfg');
+    expect(loads).toBe(1); // no id deps → targeted change cannot purge it
+  });
+
+  test('deps are namespaced per watched collection — other collections do not cross-drop', async () => {
+    const hot = createHotCache();
+    let loads = 0;
+    const q = hot.register('profile', {
+      watch: [
+        { db: fakeDb, collection: 'users', idsOf: (uid: string) => [uid] },
+        { db: fakeDb, collection: 'accounts', idsOf: (uid: string) => [`acc-${uid}`] },
+      ],
+      loader: async (uid: string) => {
+        loads++;
+        return `${uid}@acc`;
+      },
+    });
+    await q.get('u1');
+    hot.invalidateIds('accounts', ['acc-other']); // different account
+    expect(await q.get('u1')).toBe('u1@acc');
+    expect(loads).toBe(1);
+    hot.invalidateIds('accounts', ['acc-u1']); // its account changed → drop
+    expect(await q.get('u1')).toBe('u1@acc');
+    expect(loads).toBe(2);
+  });
+
+  test('queries without idsOf keep the coarse contract: invalidateIds purges them fully', async () => {
+    const hot = createHotCache();
+    let loads = 0;
+    const q = hot.register('coarseCount', {
+      watch: [{ db: fakeDb, collection: 'products' }],
+      loader: async () => {
+        loads++;
+        return loads;
+      },
+    });
+    await q.get();
+    hot.invalidateIds('products', ['whatever']);
+    expect(await q.get()).toBe(2);
+    expect(loads).toBe(2);
+  });
+
+  test('mixed refs: a bound ref without idsOf forces a full purge when THAT collection changes', async () => {
+    const hot = createHotCache();
+    let loads = 0;
+    const q = hot.register('userWithOrders', {
+      watch: [
+        { db: fakeDb, collection: 'users', idsOf: (uid: string) => [uid] },
+        { db: fakeDb, collection: 'orders' }, // whole-collection dependency
+      ],
+      loader: async (uid: string) => {
+        loads++;
+        return `${uid}+orders`;
+      },
+    });
+    await q.get('u1');
+    await q.get('u2');
+    hot.invalidateIds('orders', ['o9']); // orders changed anywhere → coarse
+    expect(await q.get('u1')).toBe('u1+orders');
+    expect(loads).toBe(3);
+    hot.invalidateIds('users', ['u1']); // users change → still surgical
+    expect(await q.get('u2')).toBe('u2+orders'); // u2 entry survived
+    expect(loads).toBe(4);
+    expect(await q.get('u1')).toBe('u1+orders');
+    expect(loads).toBe(5);
+  });
+
+  test('ids match across representations (ObjectId instance ↔ hex string)', async () => {
+    const hexA = new ObjectId().toString();
+    const hexB = new ObjectId().toString();
+    const hot = createHotCache();
+    let loads = 0;
+    const q = hot.register('docById', {
+      watch: [{ db: fakeDb, collection: 'docs', idsOf: (...ids: readonly ObjectId[]) => ids }],
+      loader: async (id: string) => {
+        loads++;
+        return id;
+      },
+    });
+    await q.get(hexA);
+    await q.get(hexB);
+    expect(loads).toBe(2);
+    hot.invalidateIds('docs', [new ObjectId(hexA)]); // event side delivers an ObjectId
+    expect(await q.get(hexA)).toBe(hexA); // dropped → reload
+    expect(loads).toBe(3);
+    expect(await q.get(hexB)).toBe(hexB); // untouched
+    expect(loads).toBe(3);
+  });
+
+  test('a throwing or non-array idsOf marks entries conservative (dropped by any change)', async () => {
+    for (const mode of ['throw', 'non-array'] as const) {
+      const hot = createHotCache();
+      let loads = 0;
+      const brokenIdsOf =
+        mode === 'throw'
+          ? (): readonly unknown[] => {
+              throw new Error('bad extractor');
+            }
+          : (): readonly unknown[] => 'oops' as unknown as readonly string[];
+      const q = hot.register(`fragile-${mode}`, {
+        watch: [{ db: fakeDb, collection: 'users', idsOf: brokenIdsOf }],
+        loader: async (id: string) => {
+          loads++;
+          return id;
+        },
+      });
+      await q.get('a');
+      await q.get('b');
+      expect(loads).toBe(2);
+      hot.invalidateIds('users', ['zzz']); // unrelated id — but extraction failed
+      expect(await q.get('a')).toBe('a'); // dropped anyway (safe)
+      expect(await q.get('b')).toBe('b'); // ...and so was its sibling
+      expect(loads).toBe(4);
+      await hot.stop();
+    }
+  });
+
+  test('empty ids array is a no-op even for extractor-bound queries', async () => {
+    const hot = createHotCache();
+    let loads = 0;
+    const q = hot.register('noopCase', {
+      watch: [{ db: fakeDb, collection: 'users', idsOf: (id: string) => [id] }],
+      loader: async (id: string) => {
+        loads++;
+        return id;
+      },
+    });
+    await q.get('a');
+    hot.invalidateIds('users', []);
+    expect(await q.get('a')).toBe('a');
+    expect(loads).toBe(1);
+  });
+
+  test('stats() counts dropped entries per query (idDrops)', async () => {
+    const hot = createHotCache({ probe: async () => false });
+    const q = hot.register('counted', {
+      watch: [{ db: fakeDb, collection: 'users', idsOf: (id: string) => [id] }],
+      loader: async (id: string) => id,
+    });
+    await hot.start();
+    await q.get('a');
+    await q.get('b');
+    await q.get('c');
+    hot.invalidateIds('users', ['a', 'b']); // drops two entries in one call
+    expect(hot.stats().perQuery.counted!.idDrops).toBe(2);
+    hot.invalidateIds('users', ['c']);
+    expect(hot.stats().perQuery.counted!.idDrops).toBe(3);
+    await hot.stop();
+  });
+
+  test('an id-targeted invalidation during an in-flight load prevents the stale write', async () => {
+    const hot = createHotCache();
+    let loads = 0;
+    let releaseFirst!: () => void;
+    const q = hot.register('race-id', {
+      watch: [{ db: fakeDb, collection: 'users', idsOf: (id: string) => [id] }],
+      loader: async (_id: string) => {
+        loads++;
+        if (loads === 1) await new Promise<void>((r) => (releaseFirst = r));
+        return `v${loads}`;
+      },
+    });
+    const pending = q.get('a'); // miss → loader in flight
+    await sleep(5);
+    hot.invalidateIds('users', ['a']); // change lands mid-load → gen bumped
+    releaseFirst(); // pre-change load resolves AFTER the invalidation
+    expect(await pending).toBe('v1'); // caller still gets the value
+    expect(await q.get('a')).toBe('v2'); // fresh load — stale value not stored
+    expect(loads).toBe(2);
     await hot.stop();
   });
 });

@@ -79,6 +79,12 @@ export const cacheCollectionKey = (dbName: string, physical: string): string =>
 export class QueryCache {
   private lru: LRU<string, Entry<unknown>>;
   private index = new Map<string, Set<string>>();
+  /**
+   * Reverse index: key → every collection it is registered under. Without it,
+   * keys dropped by TTL expiry / capacity eviction / version-guard would stay
+   * listed in `index` forever (unbounded growth + O(dead) invalidation scans).
+   */
+  private keyCollections = new Map<string, Set<string>>();
   /** Per-collection version — bumped on every invalidation/clear of that collection. */
   private colVersions = new Map<string, number>();
   private ttlMs: number;
@@ -91,7 +97,10 @@ export class QueryCache {
   private clearEvents = 0;
 
   constructor(options: QueryCacheOptions = {}) {
-    this.lru = new LRU<string, Entry<unknown>>({ max: options.maxSize ?? 500 });
+    this.lru = new LRU<string, Entry<unknown>>({
+      max: options.maxSize ?? 500,
+      onEvict: (key) => this.unregisterKey(key),
+    });
     this.ttlMs = options.ttlMs ?? 0;
     this.clone = options.clone ?? false;
   }
@@ -136,7 +145,7 @@ export class QueryCache {
       return undefined;
     }
     if (this.ttlMs > 0 && Date.now() > entry.expiresAt) {
-      this.lru.delete(key);
+      this.dropKey(key);
       this.misses++;
       return undefined;
     }
@@ -146,7 +155,7 @@ export class QueryCache {
     if (entry.versions) {
       for (const [col, ver] of Object.entries(entry.versions)) {
         if (this.versionOf(col) !== ver) {
-          this.lru.delete(key);
+          this.dropKey(key);
           this.misses++;
           return undefined;
         }
@@ -155,6 +164,25 @@ export class QueryCache {
     this.hits++;
     // Each read gets its own copy so the stored entry can't be mutated.
     return this.clone ? cloneDeep(entry.value) : entry.value;
+  }
+
+  /** Remove a key from the LRU and every collection index that references it. */
+  private dropKey(key: string): void {
+    this.lru.delete(key);
+    this.unregisterKey(key);
+  }
+
+  /** Remove `key` from `index` (called for evictions AND explicit drops). */
+  private unregisterKey(key: string): void {
+    const collections = this.keyCollections.get(key);
+    if (!collections) return;
+    this.keyCollections.delete(key);
+    for (const collection of collections) {
+      const keys = this.index.get(collection);
+      if (!keys) continue;
+      keys.delete(key);
+      if (keys.size === 0) this.index.delete(collection);
+    }
   }
 
   set(
@@ -175,11 +203,12 @@ export class QueryCache {
     // Primary collection is derived from the key prefix. `collections` lists
     // ADDITIONAL source collections the entry depends on (e.g. the `$lookup`
     // join target of a cached aggregation) — registering the key under each
-    // means a write to ANY source drops the entry. Stale cross-index refs left
-    // behind by an invalidation are harmless (`lru.delete` no-ops).
+    // means a write to ANY source drops the entry. The reverse index keeps
+    // both sides in sync so evictions/expiry never leak dead references.
     const sep = key.indexOf(SEP);
     const primary = sep === -1 ? key : key.slice(0, sep);
     const collectionKeys = new Set<string>([primary, ...(collections ?? [])]);
+    this.keyCollections.set(key, collectionKeys);
     for (const collection of collectionKeys) {
       let keys = this.index.get(collection);
       if (!keys) {
@@ -192,7 +221,7 @@ export class QueryCache {
 
   delete(key: string): void {
     this.deletes++;
-    this.lru.delete(key);
+    this.dropKey(key);
   }
 
   /** Drop every cached entry belonging to a physical collection. */
@@ -203,7 +232,9 @@ export class QueryCache {
     const keys = this.index.get(collection);
     if (!keys) return;
     this.invalidateEvents++;
-    for (const key of keys) this.lru.delete(key);
+    // dropKey also unregisters each key from its OTHER source collections
+    // (e.g. a `$lookup` entry listed under both sides) — no dead refs left.
+    for (const key of [...keys]) this.dropKey(key);
     this.index.delete(collection);
   }
 
@@ -216,5 +247,6 @@ export class QueryCache {
     }
     this.lru.clear();
     this.index.clear();
+    this.keyCollections.clear();
   }
 }

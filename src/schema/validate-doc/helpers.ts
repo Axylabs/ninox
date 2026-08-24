@@ -3,7 +3,7 @@
  * description / BSON-type checks, and numeric-bounds + reserved-field checks.
  * All pure — no schema/doc knowledge, just value-level helpers.
  */
-import { Decimal128, ObjectId } from 'mongodb';
+import { Decimal128, Long, ObjectId } from 'mongodb';
 import { ORM_RESERVED_FIELDS } from '../to-mongo-schema.ts';
 import type { DriftIssue, DriftIssueCode } from './types.ts';
 
@@ -36,10 +36,16 @@ export const isPlainObject = (value: unknown): boolean =>
   !(value instanceof ObjectId) &&
   !(value instanceof RegExp);
 
-/** Coerce a value to a finite number for numeric-constraint checks (Decimal128-aware). */
+/** Coerce a value to a finite number for numeric-constraint checks (BSON-aware). */
 export const numericValue = (value: unknown): number | undefined => {
   if (value instanceof Decimal128) {
     const n = Number(value.toString());
+    return Number.isNaN(n) ? undefined : n;
+  }
+  // `Long` above 2^53 loses precision via toNumber, but bounds checks are
+  // advisory — skipping them silently (the old behavior) is worse.
+  if (value instanceof Long) {
+    const n = value.toNumber();
     return Number.isNaN(n) ? undefined : n;
   }
   if (typeof value === 'number' && !Number.isNaN(value)) return value;
@@ -123,7 +129,7 @@ export const bsonTypeMatches = (bsonType: string | undefined, value: unknown): b
     case 'double':
       return typeof value === 'number' && !Number.isNaN(value);
     case 'long':
-      return typeof value === 'number' && Number.isInteger(value);
+      return (typeof value === 'number' && Number.isInteger(value)) || value instanceof Long;
     case 'decimal':
       return value instanceof Decimal128;
     default:

@@ -67,6 +67,7 @@ export const mongoTransactionsEnabled = (
   if (env !== undefined) return env;
   const state = store.get();
   if (state.probed) return state.transactionsSupported;
-  if (options.urlHint) return /replicaSet=/.test(options.urlHint);
+  // `mongodb+srv` seeds always resolve to a replica-set/mongos topology.
+  if (options.urlHint) return /replicaSet=|mongodb\+srv:|loadBalanced=true/i.test(options.urlHint);
   return false;
 };

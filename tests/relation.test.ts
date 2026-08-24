@@ -36,12 +36,14 @@ describe('populate (DataLoader-batched relations)', () => {
       { _id: 'o2', userId: 'u2' },
     ] as Array<Row & Record<string, unknown>>;
 
-    await populator.populate(orders, [
+    const populated = await populator.populate(orders, [
       belongsTo({ collection: 'users', localField: 'userId', as: 'customer' }),
     ]);
 
-    expect(orders[0]!.customer).toMatchObject({ _id: 'u1', name: 'Alice' });
-    expect(orders[1]!.customer).toMatchObject({ _id: 'u2', name: 'Bob' });
+    expect(populated[0]!.customer).toMatchObject({ _id: 'u1', name: 'Alice' });
+    expect(populated[1]!.customer).toMatchObject({ _id: 'u2', name: 'Bob' });
+    // Copy-on-write: source docs stay pristine (they may be shared cache entries).
+    expect(orders[0]).toEqual({ _id: 'o1', userId: 'u1' });
     // One batch query for the whole relation — no N+1.
     expect(queries).toEqual(['users']);
   });
@@ -50,10 +52,10 @@ describe('populate (DataLoader-batched relations)', () => {
     const { deps } = makeFakeDb({ users: [] });
     const populator = makePopulator(deps);
     const docs = [{ _id: 'o1', userId: 'u-missing' }] as Array<Row & Record<string, unknown>>;
-    await populator.populate(docs, [
+    const populated = await populator.populate(docs, [
       belongsTo({ collection: 'users', localField: 'userId', as: 'customer' }),
     ]);
-    expect(docs[0]!.customer).toBeNull();
+    expect(populated[0]!.customer).toBeNull();
   });
 
   test('hasMany resolves an array per source doc', async () => {
@@ -70,12 +72,12 @@ describe('populate (DataLoader-batched relations)', () => {
       { _id: 'u2', name: 'Bob' },
     ] as Array<Row & Record<string, unknown>>;
 
-    await populator.populate(users, [
+    const populated = await populator.populate(users, [
       hasMany({ collection: 'orders', localField: '_id', foreignField: 'userId', as: 'orders' }),
     ]);
 
-    expect(users[0]!.orders).toHaveLength(2);
-    expect(users[1]!.orders).toHaveLength(1);
+    expect(populated[0]!.orders).toHaveLength(2);
+    expect(populated[1]!.orders).toHaveLength(1);
     expect(queries).toEqual(['orders']);
   });
 
@@ -93,7 +95,7 @@ describe('populate (DataLoader-batched relations)', () => {
     const populator = makePopulator(deps);
     const teams = [{ _id: 't1', name: 'Core' }] as Array<Row & Record<string, unknown>>;
 
-    await populator.populate(teams, [
+    const populated = await populator.populate(teams, [
       manyToMany({
         collection: 'users',
         localField: '_id',
@@ -102,9 +104,52 @@ describe('populate (DataLoader-batched relations)', () => {
       }),
     ]);
 
-    expect(teams[0]!.members).toHaveLength(2);
-    expect((teams[0]!.members as Row[]).map((m) => m.name).sort()).toEqual(['Alice', 'Bob']);
+    expect(populated[0]!.members).toHaveLength(2);
+    expect((populated[0]!.members as Row[]).map((m) => m.name).sort()).toEqual(['Alice', 'Bob']);
     expect(queries).toEqual(['memberships', 'users']);
+  });
+
+  test('manyToMany dedupes targets reached through duplicate pivot rows', async () => {
+    const { deps } = makeFakeDb({
+      memberships: [
+        { _id: 'm1', teamId: 't1', memberId: 'u1' },
+        { _id: 'm2', teamId: 't1', memberId: 'u1' }, // duplicate pivot row
+      ],
+      users: [{ _id: 'u1', name: 'Alice' }],
+    });
+    const populator = makePopulator(deps);
+    const teams = [{ _id: 't1', name: 'Core' }] as Array<Row & Record<string, unknown>>;
+
+    const populated = await populator.populate(teams, [
+      manyToMany({
+        collection: 'users',
+        localField: '_id',
+        through: { collection: 'memberships', localField: 'teamId', foreignField: 'memberId' },
+        as: 'members',
+      }),
+    ]);
+
+    expect(populated[0]!.members).toHaveLength(1); // not duplicated per pivot row
+  });
+
+  test('relations sharing a target collection + field share one batch', async () => {
+    const { deps, queries } = makeFakeDb({
+      users: [
+        { _id: 'u1', name: 'Alice' },
+        { _id: 'u2', name: 'Bob' },
+      ],
+    });
+    const populator = makePopulator(deps);
+    const orders = [{ _id: 'o1', customerId: 'u1', sellerId: 'u2' }] as Array<
+      Row & Record<string, unknown>
+    >;
+
+    await populator.populate(orders, [
+      belongsTo({ collection: 'users', localField: 'customerId', as: 'customer' }),
+      belongsTo({ collection: 'users', localField: 'sellerId', as: 'seller' }),
+    ]);
+    // Same (collection, foreignField) → ONE $in batch covers both relations.
+    expect(queries.filter((q) => q === 'users')).toHaveLength(1);
   });
 
   test('100 source docs cause exactly 1 batched query per relation (N+1 eliminated)', async () => {
@@ -116,11 +161,11 @@ describe('populate (DataLoader-batched relations)', () => {
       userId: `u${i}`,
     })) as Array<Row & Record<string, unknown>>;
 
-    await populator.populate(docs, [
+    const populated = await populator.populate(docs, [
       belongsTo({ collection: 'users', localField: 'userId', as: 'user' }),
     ]);
 
-    expect(docs[42]!.user).toMatchObject({ _id: 'u42' });
+    expect(populated[42]!.user).toMatchObject({ _id: 'u42' });
     expect(queries).toEqual(['users']);
   });
 });

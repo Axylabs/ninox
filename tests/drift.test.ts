@@ -450,7 +450,8 @@ maybe('document drift — read-path hardening (real Mongo)', () => {
       },
     );
     expect(page.data.length).toBe(1);
-    expect(Object.keys(page.data[0]).sort()).toEqual(['_id', 'email']);
+    expect(page.data[0]).toBeDefined();
+    expect(Object.keys(page.data[0]!).sort()).toEqual(['_id', 'email']);
     const driftWarn = cap.warns.slice(before).find((w) => w.obj?.op === 'mongo.paginateFlexible');
     expect(driftWarn).toBeUndefined();
   });

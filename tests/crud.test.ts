@@ -134,6 +134,51 @@ describe('CRUD ops', () => {
     expect(events).toEqual(['before', 'after']);
   });
 
+  test('a throwing afterUpdate hook does not fail the committed write', async () => {
+    const errors: string[] = [];
+    const error = ((obj: Record<string, unknown> | string, msg?: string) => {
+      errors.push(typeof obj === 'string' ? obj : (msg ?? ''));
+    }) as unknown as LoggerLike['error'];
+    const logger: LoggerLike = { debug() {}, info() {}, warn() {}, error };
+    const crud = makeCrudOps<any, any>(
+      {
+        databaseName: 'test',
+        collection: () => ({ updateOne: async () => ({ matchedCount: 1, upsertedCount: 0 }) }),
+      } as unknown as Db,
+      'test',
+      logger,
+      {
+        resolveCollectionName: (logical: string) => logical,
+        hooks: {
+          users: {
+            afterUpdate: () => {
+              throw new Error('boom');
+            },
+          },
+        },
+      },
+    );
+    const res = await crud.updateOne('users', { email: 'x' }, { $set: { role: 'admin' } });
+    expect(res).toMatchObject({ matchedCount: 1 });
+    expect(errors.join(' ')).toContain('post-commit afterUpdate');
+  });
+
+  test('a throwing beforeCreate hook still fails insertOne (pre-commit abort)', async () => {
+    const crud = makeCrud(
+      { insertOne: async () => ({ insertedId: 'id' }) },
+      {
+        hooks: {
+          users: {
+            beforeCreate: () => {
+              throw new Error('denied');
+            },
+          },
+        },
+      },
+    );
+    await expect(crud.insertOne('users', { email: 'a@b.c' })).rejects.toThrow('denied');
+  });
+
   test('writes invalidate the query cache for the collection', async () => {
     const cache = new QueryCache();
     const crud = makeCrud({ insertOne: async () => ({ insertedId: 'id' }) }, { cache });

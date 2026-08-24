@@ -174,8 +174,9 @@ export const createRepository = <
     findOneOrFail: (filter, o) => manager.getOneOrFail(collection, filter, o),
     findMany: (filter, o) =>
       manager.findMany(collection, filter, {
-        ...(o ?? {}),
+        // Repository `limit` is a DEFAULT — a per-call option must win.
         ...(options.limit !== undefined ? { limit: options.limit } : {}),
+        ...(o ?? {}),
       }),
     findActive: (filter, o) => manager.findActive(collection, filter, o),
     count: (filter, o) => manager.countDocuments(collection, filter, o),

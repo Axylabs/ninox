@@ -118,7 +118,11 @@ export const createCachedAggregate = <C extends string>(ctx: CachedAggregateCtx<
     };
 
     if (shouldDedupe) {
-      const dedupeKey = `${cacheCollectionKey(client.databaseName, physical)}|${opName}|${stableHash([pipeline, options])}`;
+      // Version-scoped like the CRUD read path: a post-invalidation reader must
+      // not join a pre-invalidation in-flight aggregation.
+      const primaryKey = cacheCollectionKey(client.databaseName, physical);
+      const gen = cache !== undefined ? cache.versionOf(primaryKey) : '';
+      const dedupeKey = `${primaryKey}|${gen}|${opName}|${stableHash([pipeline, options])}`;
       return opts.inFlight!.run(dedupeKey, runOnce);
     }
     return runOnce();

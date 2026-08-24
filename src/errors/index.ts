@@ -29,5 +29,6 @@ export { httpStatusForError, serializeError } from './http-status.ts';
 export {
   isMongoDuplicateKeyError,
   isMongoTransientError,
+  isTransactionUnsupportedError,
   TRANSIENT_MONGO_ERROR_CODES,
 } from './transient.ts';

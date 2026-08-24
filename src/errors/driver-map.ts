@@ -4,7 +4,11 @@
  * plus `extractValidationPaths` for surfacing which `$jsonSchema` fields failed.
  */
 import { AppError, DomainError, type ErrorContext, InfraError } from './classes.ts';
-import { isMongoDuplicateKeyError, isMongoTransientError } from './transient.ts';
+import {
+  isMongoDriverError,
+  isMongoDuplicateKeyError,
+  isMongoTransientError,
+} from './transient.ts';
 
 /** Shape of a single `writeErrors[]` entry on a `MongoBulkWriteError`. */
 interface WriteErrorLike {
@@ -74,6 +78,10 @@ const isBulkWriteError = (error: unknown): boolean =>
  */
 export const mapMongoDriverError = (error: unknown, ctx: ErrorContext = {}): unknown => {
   if (error instanceof AppError) return error;
+  // Application errors (e.g. a 409 ConflictError thrown inside a transaction
+  // callback or a route) are NOT driver errors — passing them through keeps
+  // their status/message intact. Only actual driver errors get mapped.
+  if (!isMongoDriverError(error)) return error;
 
   const context: Record<string, unknown> = { ...(ctx as Record<string, unknown>) };
   if (isMongoDuplicateKeyError(error)) {
@@ -88,7 +96,10 @@ export const mapMongoDriverError = (error: unknown, ctx: ErrorContext = {}): unk
     if (first?.code === 11000) {
       if (first.keyPattern) context.keyPattern = first.keyPattern;
       if (first.keyValue) context.keyValue = first.keyValue;
-      return new DomainError('DUPLICATE_KEY', first.errmsg ?? 'Duplicate key error', context);
+      // Fixed message: the raw `errmsg` embeds stored values
+      // (`E11000 ... dup key: { email: "victim@x.com" }`) and this message is
+      // forwarded to clients via `toJSON()`/`serializeError()`.
+      return new DomainError('DUPLICATE_KEY', 'Duplicate key error', context);
     }
     if (first?.code === 121) {
       addValidationContext(context, first.errInfo);

@@ -240,17 +240,20 @@ export const makeReadOps = <
         ) as unknown as Array<DocOf2<X>[K]>;
       },
       'none',
+      String(field),
     );
   };
 
-  /** Approximate collection count from metadata (fast, not filter-aware). */
+  /** Approximate collection count from metadata (fast, not filter-aware). Cached + deduped. */
   const estimatedDocumentCount = async <X extends C>(
     collection: X,
     options?: EstimatedDocumentCountOptions & QueryOptions,
   ): Promise<number> =>
-    ctx.run(
+    read(
       collection,
       'mongo.estimatedDocumentCount',
+      {},
+      options,
       async (r) => {
         const opts: EstimatedDocumentCountOptions = {
           ...(r.driverOpts as EstimatedDocumentCountOptions),
@@ -259,7 +262,7 @@ export const makeReadOps = <
         };
         return coll(collection).estimatedDocumentCount(opts);
       },
-      options,
+      'none',
     );
 
   return {

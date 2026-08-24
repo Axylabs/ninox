@@ -25,12 +25,12 @@ export const stripUndefinedKeys = <T extends Record<string, unknown>>(doc: T): T
  * forms beyond those two are left untouched (their semantics differ).
  */
 export const stripUndefinedFromUpdate = <T>(update: T): T => {
-  if (update === null || typeof update !== "object") return update;
+  if (update === null || typeof update !== 'object') return update;
   const doc = update as Record<string, unknown>;
 
-  for (const operator of ["$set", "$setOnInsert"]) {
+  for (const operator of ['$set', '$setOnInsert']) {
     const op = doc[operator];
-    if (op !== null && typeof op === "object" && !Array.isArray(op)) {
+    if (op !== null && typeof op === 'object' && !Array.isArray(op)) {
       const opDoc = op as Record<string, unknown>;
       for (const key of Object.keys(opDoc)) {
         if (opDoc[key] === undefined) delete opDoc[key];

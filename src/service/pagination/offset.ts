@@ -5,7 +5,7 @@
  * — the ORM's key pagination perf win vs the classic count-then-find pattern.
  */
 import type { Abortable, AggregateOptions, Document } from 'mongodb';
-import { DEFAULT_MAX_LIMIT } from '../../shared/constants.ts';
+import { DEFAULT_FIND_LIMIT, DEFAULT_MAX_LIMIT } from '../../shared/constants.ts';
 import type { FilterInput } from '../../shared/filter-types.ts';
 import { normalizePageLimit } from '../../shared/pagination-math.ts';
 import { buildPaginationResult, type PaginationResult } from '../../shared/pagination-result.ts';
@@ -37,6 +37,9 @@ export const makePaginateFlexible = <
         ...(config.limit !== undefined ? { limit: config.limit } : {}),
       },
       config.maxLimit ?? DEFAULT_MAX_LIMIT,
+      // Same default as `findMany`/`paginateCursor` — the two pagination
+      // APIs used to disagree silently (10 vs 100).
+      { limit: DEFAULT_FIND_LIMIT },
     );
 
     const dataStages: Document[] = [

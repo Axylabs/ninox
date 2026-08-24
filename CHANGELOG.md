@@ -6,6 +6,66 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **CRUD cache-key identity** — the cache key now includes the op name (and
+  `distinct`'s field), so `getOne` / `countDocuments` / `distinct` on the same
+  filter can never be served each other's cached results. The key hash is a
+  dual-round ~64-bit digest instead of single-round djb2, and it is computed
+  once per read and shared with the dedup key. Pure retry knobs (`maxAttempts`,
+  `retryDelayMs`, `dedupe`, `cache`, `retryWrites`) no longer fragment keys;
+  `drift` still does (a `'throw'` read must never serve an unvalidated entry).
+- **Migration journal** — claims are now lease-based (`leaseMs`, auto-renewed
+  during long `up()`s) with a unique index on the journal `name`. A crashed
+  runner's claim is stolen only after lease expiry, live claims are never
+  stolen, `markApplied` re-inserts when its row vanished concurrently (no more
+  silent re-application), journal rows sort by NUMERIC prefix, `down(target)`
+  validates the target before rolling anything back, and `create()` scaffolds
+  atomically (`wx`) so concurrent calls can't clobber files. New runner
+  options: `db` (which connected database to target in multi-DB services),
+  `leaseMs`.
+- **Connection strings** — `mongodb+srv://` URIs no longer get
+  `directConnection=true` appended (the driver rejects that combination), and
+  multi-host seed lists are normalized correctly (manual query parsing — the
+  WHATWG parser rejects `h1:27017,h2:27017`).
+- **Connections** — concurrent `makeConnections()` share one connect promise
+  per URL (the check-then-act race used to leak the losing client's pool).
+- **Transactions** — one shared `isTransactionUnsupportedError` predicate for
+  both fallback layers; unknown capability state now ATTEMPTS the transaction
+  instead of silently downgrading; the unsupported warning fires once.
+- **Schema numeric kinds** — `s.double()` emits `bsonType: ['double','int','long']`
+  and `s.integer()`/`s.long()` emit wire unions with `multipleOf: 1`: type-correct
+  TS numbers (`3_000_000_000`, `{ rating: 5 }`) pass the DB validator again while
+  server-side integrality is preserved. Enums fall back to the numeric union when
+  members exceed int32 range.
+- **Populate** — joins attach to COPIES of the source docs (a populated result
+  set can no longer poison the shared query cache), independent relations run
+  concurrently, relations sharing a target collection+field share one `$in`
+  batch, and m:n targets are deduped across duplicate pivot rows.
+- **QueryBuilder** — chains are immutable (stored base queries are safe as
+  templates), `where()` deep-merges operator docs (`$gte` + `$lte` compose
+  instead of the last write silently winning), repeated `and()` stays flat,
+  `or()` without filters throws instead of building an invalid `$or`, and
+  `exists()` transfers `_id` only.
+- **Transient classification** — `MongoServerSelectionError` (failover), codes
+  251/262/10058, and the `TransientTransactionError` error label are retryable;
+  nameless-but-coded errors (`{code: 11000}`) map correctly again.
+- **HotCache** — in-flight dedup keys include the generation (post-invalidation
+  readers start fresh loads instead of joining doomed ones); a failed
+  `start()` is retried on the next read instead of disabling freshness forever;
+  watcher loops cannot float unhandled rejections; lazy watch-db accessors that
+  throw are retried; reconnect backoff resets after sustained health; the
+  standalone fallback warns about unbounded staleness; ticker sweeps have an
+  in-flight budget.
+- **Health** — an empty manager record reports `ok: false`; per-db failures
+  carry the error message; timeouts stay honest under load.
+- **QueryCache memory** — capacity evictions, TTL expiry and version-guard
+  drops now unregister dead keys from every secondary index (no unbounded
+  index growth on long-running processes).
+- **Drift validator** — compiled string patterns are memoized per schema field
+  and reserved-key sets hoisted (less allocation per validated doc); `Long`
+  values above 2^53 no longer false-positive drift.
+
 ### Changed
 
 - **Internal refactor — no API changes.** Source tree reorganized for
@@ -19,6 +79,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
   output are unchanged. `TRANSIENT_MONGO_ERROR_CODES` is now a frozen
   `ReadonlySet`. Added `scripts/check-api.ts` (`bun run check:api`) to keep the
   barrel and `API.md` in sync.
+
+### Added
+
+- **HotCache id-level watch (`idsOf` + `invalidateIds`)** — a watch ref may
+  declare an `idsOf(args)` extractor mapping loader arguments to the document
+  ids (or groups of ids) a result depends on. Replica change streams then purge
+  only the entries depending on a changed `documentKey._id`, and manual
+  `hot.invalidateIds(collection, ids)` does the same in any mode (e.g. wired to
+  ORM after-write hooks). Queries without an extractor keep burst semantics —
+  any change purges their whole LRU (the right default for aggregations).
+  ObjectId/hex and other representations normalize to comparable keys;
+  failing extractors degrade conservatively; `stats()` gains per-query
+  `idDrops`.
+- `isTransactionUnsupportedError` predicate export; `defineCollections` /
+  `defineCollection` fail fast when `timestamps` fields are missing from the
+  schema (strict validation would otherwise reject every stamped write);
+  `estimateSize` covers Map/Set/Buffers/cycles; `withRetry` backoff jitter;
+  `mergeMongoFilters` deep-merges operator docs and concatenates `$and`/`$or`.
 
 ## [0.1.3] — 2026-08-18
 

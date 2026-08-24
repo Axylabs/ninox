@@ -47,15 +47,30 @@ const tag = (value: unknown): TaggedValue => {
 const untag = (tagged: TaggedValue): unknown => {
   switch (tagged.t) {
     case 'oid':
-      return new ObjectId(tagged.v as string);
+      if (typeof tagged.v !== 'string') {
+        throw new BadRequest('paginateCursor: invalid cursor — oid value must be a string');
+      }
+      return new ObjectId(tagged.v);
     case 'date':
-      return new Date(tagged.v as string);
+      if (typeof tagged.v !== 'string') {
+        throw new BadRequest('paginateCursor: invalid cursor — date value must be a string');
+      }
+      return new Date(tagged.v);
     case 'string':
-      return tagged.v as string;
+      if (typeof tagged.v !== 'string') {
+        throw new BadRequest('paginateCursor: invalid cursor — string value expected');
+      }
+      return tagged.v;
     case 'number':
-      return tagged.v as number;
+      if (typeof tagged.v !== 'number') {
+        throw new BadRequest('paginateCursor: invalid cursor — number value expected');
+      }
+      return tagged.v;
     case 'boolean':
-      return tagged.v as boolean;
+      if (typeof tagged.v !== 'boolean') {
+        throw new BadRequest('paginateCursor: invalid cursor — boolean value expected');
+      }
+      return tagged.v;
     case 'null':
       return null;
   }

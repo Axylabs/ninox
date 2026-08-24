@@ -49,10 +49,11 @@ maybe('undefined-value stripping on writes (real MongoDB)', () => {
 
   test('insertOne with undefined optional fields stores them absent (not null)', async () => {
     const db = service.db.primaryClient;
-    const { insertedId } = await db.insertOne(
-      'items',
-      { name: 'a', note: undefined, meta: 'present' } as never,
-    );
+    const { insertedId } = await db.insertOne('items', {
+      name: 'a',
+      note: undefined,
+      meta: 'present',
+    } as never);
     const row = (await db.getOne('items', { _id: insertedId })) as Record<string, unknown>;
     expect(row).not.toBeNull();
     expect(row.meta).toBe('present');
@@ -81,11 +82,9 @@ maybe('undefined-value stripping on writes (real MongoDB)', () => {
   test('updateOne $set operator with undefined strips the key inside $set', async () => {
     const db = service.db.primaryClient;
     const { insertedId } = await db.insertOne('items', { name: 'd', meta: 'old' } as never);
-    await db.updateOne(
-      'items',
-      { _id: insertedId },
-      { $set: { meta: 'new', note: undefined } } as never,
-    );
+    await db.updateOne('items', { _id: insertedId }, {
+      $set: { meta: 'new', note: undefined },
+    } as never);
     const row = (await db.getOne('items', { _id: insertedId })) as Record<string, unknown>;
     expect(row.meta).toBe('new');
     expect(row.note).toBeUndefined();
@@ -93,11 +92,7 @@ maybe('undefined-value stripping on writes (real MongoDB)', () => {
 
   test('upsert with undefined in the update does not fail', async () => {
     const db = service.db.primaryClient;
-    await db.upsert(
-      'items',
-      { name: 'e' },
-      { $set: { meta: 'e-meta', note: undefined } } as never,
-    );
+    await db.upsert('items', { name: 'e' }, { $set: { meta: 'e-meta', note: undefined } } as never);
     const row = (await db.getOne('items', { name: 'e' })) as Record<string, unknown>;
     expect(row.meta).toBe('e-meta');
   });

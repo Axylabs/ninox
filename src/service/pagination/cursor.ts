@@ -92,6 +92,7 @@ export const makePaginateCursor = <
           ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
           ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
           ...(r.sdk.hint !== undefined ? { hint: r.sdk.hint } : {}),
+          ...(r.sdk.batchSize !== undefined ? { batchSize: r.sdk.batchSize } : {}),
         };
         return client
           .collection<Document>(resolve(String(collection)))
@@ -117,13 +118,19 @@ export const makePaginateCursor = <
       page as unknown as Document[],
     );
     const boundary = backwards ? rows[limit] : page[page.length - 1];
-    const nextCursor =
-      hasMore && boundary !== undefined
-        ? encodeCursor({
-            sort: config.sort,
-            values: sortKeys.map(([f]) => (boundary as Document)[f]),
-          })
-        : null;
+    let nextCursor: string | null = null;
+    if (hasMore && boundary !== undefined) {
+      const values = sortKeys.map(([f]) => (boundary as Document)[f]);
+      if (values.some((v) => v === undefined)) {
+        // A boundary doc missing a sort field would encode as `null`, whose
+        // keyset comparison ALSO matches missing fields — pages could loop or
+        // skip. Fail loudly instead of corrupting pagination.
+        throw new BadRequest(
+          'paginateCursor: boundary document is missing a sort field — every sort key must exist on every document for keyset pagination',
+        );
+      }
+      nextCursor = encodeCursor({ sort: config.sort, values });
+    }
     return { data: page as unknown as DocOf2<X>[], nextCursor, hasMore };
   };
 

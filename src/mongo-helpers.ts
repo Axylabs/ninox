@@ -13,13 +13,14 @@ export interface RetryOptions {
 
 /**
  * Retry `fn` while it throws a *transient* Mongo error (network / not-primary /
- * sharding), with exponential backoff `delayMs * 2^attempt`. Domain errors and
- * genuine data errors are never retried.
+ * sharding / server-selection during failover), with exponential backoff
+ * `delayMs * 2^attempt` plus ±20% jitter — synchronized retry waves against a
+ * recovering cluster amplify outages instead of absorbing them. Domain errors
+ * and genuine data errors are never retried.
  */
 export const withRetry = async <T>(
   fn: () => Promise<T>,
   options: RetryOptions = {},
-  _ctx?: unknown,
 ): Promise<T> => {
   const maxAttempts = Math.max(1, options.maxAttempts ?? 3);
   const delayMs = options.delayMs ?? 150;
@@ -34,7 +35,9 @@ export const withRetry = async <T>(
       lastError = err;
       attempt += 1;
       if (attempt >= maxAttempts || !isMongoTransientError(err)) throw err;
-      const backoff = delayMs * 2 ** (attempt - 1);
+      const base = delayMs * 2 ** (attempt - 1);
+      // ±20% jitter around the exponential backoff.
+      const backoff = Math.round(base * (0.8 + Math.random() * 0.4));
       logger?.debug?.({ attempt, backoffMs: backoff, error: (err as Error)?.message }, 'retrying');
       await sleep(backoff);
     }

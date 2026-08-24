@@ -79,12 +79,19 @@ const distinctKeys = (values: unknown[]): unknown[] => {
 
 /**
  * Resolve relations on an array of documents using DataLoader-batched queries.
- * Mutates the source documents in place (attaching the joined value at `as`)
- * and returns them typed with the joined fields.
+ * Source documents are COPIED (shallow) before joining — populating a result
+ * set that came from the shared query cache must never mutate the cached
+ * entry (a cached order would otherwise carry join data into every later
+ * reader of that cache entry). Returns the copies typed with joined fields.
+ *
+ * Independent relations resolve concurrently; relations sharing a target
+ * collection + foreign field share ONE DataLoader batch.
  *
  *   const orders = await users.findMany('orders', { userId });
- *   await populate(orders, [ belongsTo({ collection: 'customers', localField: 'customerId', as: 'customer' }) ]);
- *   // orders[i].customer is now the joined Customer document
+ *   const [withCustomer] = ... // orders[i].customer is now the joined Customer document
+ *   const populated = await populate(orders, [
+ *     belongsTo({ collection: 'customers', localField: 'customerId', as: 'customer' }),
+ *   ]);
  */
 export const makePopulator = (deps: PopulateDeps) => {
   const populate = async <T extends Document>(
@@ -92,67 +99,97 @@ export const makePopulator = (deps: PopulateDeps) => {
     relations: RelationDef[],
     options: PopulateOptions = {},
   ): Promise<Array<T & Record<string, unknown>>> => {
-    for (const relation of relations) {
-      const target = relation.foreignField ?? '_id';
-      const sourceKeys = distinctKeys(docs.map((doc) => (doc as Document)[relation.localField]));
+    // Copy-on-write: attach joins onto fresh copies so shared/cached
+    // documents are never polluted (see module doc).
+    const out = docs.map((doc) => ({ ...doc })) as Array<T & Record<string, unknown>>;
+    if (out.length === 0 || relations.length === 0) return out;
 
-      if (relation.type === 'belongsTo') {
-        const loader = createForeignKeyLoader(deps, relation.collection, target, options);
-        const values = await loader.loadMany(sourceKeys);
-        const byKey = new Map(sourceKeys.map((key, i) => [canonicalKey(key), values[i]]));
-        for (const doc of docs) {
-          const key = (doc as Document)[relation.localField];
-          const match =
-            key === undefined || key === null ? undefined : byKey.get(canonicalKey(key))?.[0];
-          (doc as Record<string, unknown>)[relation.as] =
-            match ?? (relation.optional ? undefined : null);
-        }
-      } else if (relation.type === 'hasMany') {
-        const loader = createForeignKeyLoader(deps, relation.collection, target, options);
-        const values = await loader.loadMany(sourceKeys);
-        const byKey = new Map(sourceKeys.map((key, i) => [canonicalKey(key), values[i] ?? []]));
-        for (const doc of docs) {
-          const key = (doc as Document)[relation.localField];
-          (doc as Record<string, unknown>)[relation.as] =
-            key === undefined || key === null ? [] : (byKey.get(canonicalKey(key)) ?? []);
-        }
-      } else {
-        // manyToMany: source → join docs → target docs (two batched hops).
-        const throughLoader = createForeignKeyLoader(
-          deps,
-          relation.through.collection,
-          relation.through.localField,
-          options,
-        );
-        const throughValues = await throughLoader.loadMany(sourceKeys);
-        const throughByKey = new Map(
-          sourceKeys.map((key, i) => [canonicalKey(key), throughValues[i] ?? []]),
-        );
-        const joinDocs = throughValues.flat();
-        const targetKeys = distinctKeys(
-          joinDocs.map((join) => (join as Document)[relation.through.foreignField]),
-        );
-
-        const targetLoader = createForeignKeyLoader(deps, relation.collection, target, options);
-        const targetValues = await targetLoader.loadMany(targetKeys);
-        const targetByKey = new Map(
-          targetKeys.map((key, i) => [canonicalKey(key), targetValues[i] ?? []]),
-        );
-
-        for (const doc of docs) {
-          const key = (doc as Document)[relation.localField];
-          const joins =
-            key === undefined || key === null ? [] : (throughByKey.get(canonicalKey(key)) ?? []);
-          const targets = joins.flatMap(
-            (join) =>
-              targetByKey.get(canonicalKey((join as Document)[relation.through.foreignField])) ??
-              [],
-          );
-          (doc as Record<string, unknown>)[relation.as] = targets;
-        }
+    // One loader per (collection, foreignField) per call: two relations
+    // targeting the same collection share a single `$in` batch instead of
+    // issuing duplicate queries.
+    const loaderCache = new Map<string, DataLoader<unknown, Document[]>>();
+    const loaderFor = (
+      collection: string,
+      foreignField: string,
+    ): DataLoader<unknown, Document[]> => {
+      const cacheKey = `${collection}\u0000${foreignField}`;
+      let loader = loaderCache.get(cacheKey);
+      if (!loader) {
+        loader = createForeignKeyLoader(deps, collection, foreignField, options);
+        loaderCache.set(cacheKey, loader);
       }
-    }
-    return docs as Array<T & Record<string, unknown>>;
+      return loader;
+    };
+
+    /** Load + index foreign docs for one hop: canonical key → matching docs. */
+    const loadIndex = async (
+      collection: string,
+      foreignField: string,
+      keys: unknown[],
+    ): Promise<Map<string, Document[]>> => {
+      const values = await loaderFor(collection, foreignField).loadMany(keys);
+      const byKey = new Map<string, Document[]>();
+      keys.forEach((key, i) => {
+        byKey.set(canonicalKey(key), (values[i] as Document[] | undefined) ?? []);
+      });
+      return byKey;
+    };
+
+    await Promise.all(
+      relations.map(async (relation) => {
+        const target = relation.foreignField ?? '_id';
+        const sourceKeys = distinctKeys(out.map((doc) => (doc as Document)[relation.localField]));
+
+        if (relation.type === 'belongsTo') {
+          const byKey = await loadIndex(relation.collection, target, sourceKeys);
+          for (const doc of out) {
+            const key = (doc as Document)[relation.localField];
+            const matches =
+              key === undefined || key === null ? undefined : byKey.get(canonicalKey(key));
+            (doc as Record<string, unknown>)[relation.as] =
+              matches?.[0] ?? (relation.optional ? undefined : null);
+          }
+        } else if (relation.type === 'hasMany') {
+          const byKey = await loadIndex(relation.collection, target, sourceKeys);
+          for (const doc of out) {
+            const key = (doc as Document)[relation.localField];
+            (doc as Record<string, unknown>)[relation.as] =
+              key === undefined || key === null ? [] : (byKey.get(canonicalKey(key)) ?? []);
+          }
+        } else {
+          // manyToMany: source → join docs → target docs (two batched hops).
+          const throughByKey = await loadIndex(
+            relation.through.collection,
+            relation.through.localField,
+            sourceKeys,
+          );
+          const joinDocs = [...throughByKey.values()].flat();
+          const targetKeys = distinctKeys(
+            joinDocs.map((join) => (join as Document)[relation.through.foreignField]),
+          );
+          const targetByKey = await loadIndex(relation.collection, target, targetKeys);
+
+          for (const doc of out) {
+            const key = (doc as Document)[relation.localField];
+            const joins =
+              key === undefined || key === null ? [] : (throughByKey.get(canonicalKey(key)) ?? []);
+            // Dedupe targets: duplicate pivot rows pointing at the same
+            // target must not repeat it in the populated array.
+            const seenTargets = new Set<string>();
+            const targets: Document[] = [];
+            for (const join of joins) {
+              const tk = canonicalKey((join as Document)[relation.through.foreignField]);
+              if (seenTargets.has(tk)) continue;
+              seenTargets.add(tk);
+              const bucket = targetByKey.get(tk);
+              if (bucket) targets.push(...bucket);
+            }
+            (doc as Record<string, unknown>)[relation.as] = targets;
+          }
+        }
+      }),
+    );
+    return out;
   };
 
   return { populate };

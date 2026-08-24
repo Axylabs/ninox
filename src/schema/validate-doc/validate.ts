@@ -51,9 +51,7 @@ function validateObjectProps(
   // unless the field opted out. The top level additionally allows the ORM's
   // reserved lifecycle fields (they are reserved in the $jsonSchema too).
   if (field.additionalProperties !== true) {
-    const allowedReserved = topLevel
-      ? new Set(['_id', ...Object.keys(ORM_RESERVED_FIELDS)])
-      : new Set<string>();
+    const allowedReserved = topLevel ? ALLOWED_RESERVED_TOP : NO_RESERVED;
     for (const key of Object.keys(value)) {
       if (key in field.properties) continue;
       if (allowedReserved.has(key)) continue;
@@ -106,6 +104,18 @@ function validateObjectProps(
 
 /** Recursive entry points shared by every validator (built after the functions above). */
 const deps: FieldValidatorDeps = { validateValue, validateObjectProps };
+
+/**
+ * Reserved top-level keys allowed under strict `additionalProperties`, hoisted
+ * to module scope: allocating this Set per validated document was measurable
+ * GC churn on the hot read path (drift defaults to 'report' — every uncached
+ * read validates every document).
+ */
+const ALLOWED_RESERVED_TOP: ReadonlySet<string> = new Set([
+  '_id',
+  ...Object.keys(ORM_RESERVED_FIELDS),
+]);
+const NO_RESERVED: ReadonlySet<string> = new Set<string>();
 
 /** Check a stored document against the declared schema; returns any drift issues. */
 export const validateDoc = (schema: ObjectField, doc: Document): DriftIssue[] => {

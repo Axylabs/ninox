@@ -55,7 +55,7 @@ validator, and the query builder's field typing from one definition.
 | `BadRequest` | V | Malformed caller input (400, code `BAD_REQUEST`). |
 | `isAppError` / `isDomainError` / `isInfraError` | V | Type guards. |
 | `mapMongoDriverError` | V | Map a raw driver error → `AppError` (11000/112/50/121/bulk). |
-| `isMappedMongoError`, `isMongoTransientError`, `isMongoDuplicateKeyError` | V | Predicates. |
+| `isMappedMongoError`, `isMongoTransientError`, `isMongoDuplicateKeyError`, `isTransactionUnsupportedError` | V | Predicates (`isTransactionUnsupportedError`: true when the deployment can't run transactions — used by both transaction-fallback layers). |
 | `TRANSIENT_MONGO_ERROR_CODES` | V | Server codes safe to retry. |
 | `ERROR_HTTP_STATUS` | V | `code → HTTP status` table (404/409/422/504) used to set `statusCode`. |
 | `httpStatusForError(err)` | V | Effective status for any thrown value (AppError-aware; raw → 500 / 503 transient). |
@@ -197,8 +197,8 @@ Manager ops: `aggregate`, `pipeline`, `groupBy`, `textSearch`, `dateRangeAnalysi
 | `cacheCollectionKey` | V | Compose a cache collection key namespaced by database (multi-DB isolation). |
 | `InFlight` | V | Concurrent identical-query coalescing. |
 | `SyncIndexesResult` | T | `{ created: string[]; dropped: string[] }` from `syncIndexes`. |
-| `HotCache`, `createHotCache` | V | Global opt-in read-through cache (replica change streams / standalone ticker). `stats()` snapshots per-query `hits`/`misses`/`refreshes`/`loadErrors`/`sizeSkips`/`evictions`. |
-| `HotCacheOptions`, `HotQueryConfig`, `HotCollectionRef`, `HotCacheMode`, `HotQueryAccessor`, `HotCacheStats`, `HotQueryStats` | T | Hot-cache config/types. `stop()` is terminal; `clone?: boolean`, `maxValueBytes?: number`, `mode?: 'replica'\|'standalone'` per config/query. |
+| `HotCache`, `createHotCache` | V | Global opt-in read-through cache (replica change streams / standalone ticker). `invalidateIds(collection, ids)` purges only entries whose `idsOf`-extracted dependencies include those documents (no-extractor queries burst); `stats()` snapshots per-query `hits`/`misses`/`refreshes`/`loadErrors`/`sizeSkips`/`idDrops`/`evictions`. |
+| `HotCacheOptions`, `HotQueryConfig`, `HotCollectionRef`, `HotCacheMode`, `HotQueryAccessor`, `HotCacheStats`, `HotQueryStats` | T | Hot-cache config/types. `stop()` is terminal; `clone?: boolean`, `maxValueBytes?: number`, `mode?: 'replica'\|'standalone'` per config/query; watch refs take an optional `idsOf` extractor for document-level invalidation (omit it to burst on any change). |
 
 ## Hooks
 
@@ -223,7 +223,7 @@ The manager also exposes `transaction(fn(session|null), txnOptions?)` and `migra
 | Export | Kind | Purpose |
 | --- | --- | --- |
 | `createMongoMigrationRunner` | V | File-based runner (`NNN_name.ts`, `_migrations` journal). |
-| `MongoMigrationRunner`, `MongoMigrationRunnerOptions` | T | Runner interface: `up()`, `down()`, `status()`, `create(name)`. |
+| `MongoMigrationRunner`, `MongoMigrationRunnerOptions` | T | Runner interface: `up()`, `down(targetName?)`, `status()`, `create(name)`. Options: `migrationDir`, `logger`, `db` (which connected database the journal targets — set explicitly in multi-DB services), `leaseMs` (claim lease, default 120s, auto-renewed during long `up()`s). |
 | `MigrationContext`, `MigrationModule` | T | Migration signature (`{ up, down }`). |
 
 Journaling is claim-based: an atomic upsert claim (status `running` → `applied`)

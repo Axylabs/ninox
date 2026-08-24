@@ -12,11 +12,19 @@
  *   - **Replica set / mongos** → change-stream watchers (`./watcher.ts`) are
  *     opened on the collections each query is bound to (`watch`). Any
  *     insert/update/delete invalidates the affected queries immediately
- *     (event-driven, works across processes, covers external writers).
+ *     (event-driven, works across processes, covers external writers). When a
+ *     watch ref declares `idsOf`, the changed document's `_id` is matched
+ *     against the dependencies each cached entry extracted from its arguments,
+ *     so only entries that actually depend on the changed document are purged.
  *   - **Standalone** (no change streams) → a single global ticker (`./ticker.ts`)
  *     background-refreshes cached entries on a set interval. Stale values keep
  *     being served until the fresh value swaps in (bounded staleness, reads
  *     never block).
+ *
+ * Both modes (and any code path that knows better than the streams — e.g. ORM
+ * after-write hooks) share one fine-tuned purge primitive: `invalidateIds(collection, ids)`
+ * drops exactly the entries depending on those documents; `invalidateCollection`
+ * stays the coarse "drop everything watching this collection" switch.
  *
  * `start()` resolves the mode once; `stop()` is **terminal** — it tears down
  * the ticker + streams and disposes the instance, so a later `get()` serves
@@ -68,6 +76,7 @@ import {
   type HotQueryAccessor,
   type HotQueryConfig,
   type HotQueryStats,
+  normalizeWatchId,
   type RegisteredQuery,
   resolveWatchDb,
   WATCH_SEP,
@@ -104,10 +113,16 @@ export class HotCache {
     this.watcher = new WatchCoordinator({
       queries: () => this.queries,
       invalidateCollection: (collection) => this.invalidateCollection(collection),
+      invalidateDocument: (collection, id) => this.invalidateIds(collection, [id]),
       isReplica: () => this._mode === 'replica',
       fallbackToStandalone: () => {
         this._mode = 'standalone';
-        if (this.refreshEnabled) this.ticker.start();
+        if (this.refreshEnabled && !this.ticker.running) {
+          this.ticker.start();
+          // Late-registered queries never get the start()-time warning; the
+          // fallback path must warn for currently-registered unbounded ones too.
+          this.ticker.warnUnboundedStaleness();
+        }
       },
       logger: this.logger,
     });
@@ -158,12 +173,14 @@ export class HotCache {
       refreshIntervalMs: config.refreshIntervalMs ?? 0,
       clone: config.clone ?? false,
       ...(config.maxValueBytes !== undefined ? { maxValueBytes: config.maxValueBytes } : {}),
+      hasIdWatch: (config.watch ?? []).some((ref) => typeof ref.idsOf === 'function'),
       gen: 0,
       hits: 0,
       misses: 0,
       refreshes: 0,
       loadErrors: 0,
       sizeSkips: 0,
+      idDrops: 0,
       warnedSize: false,
     };
     this.queries.set(name, query);
@@ -239,6 +256,57 @@ export class HotCache {
     }
   }
 
+  /**
+   * Fine-tuned purge: drop only the entries that depend on specific document
+   * ids of a watched collection. Two complementary mechanisms feed it:
+   *
+   *   - **Replica mode** — the change stream extracts `documentKey._id` from
+   *     each event and calls this with just that id, so a write to one document
+   *     no longer purges every query bound to the whole collection.
+   *   - **Manual (any mode)** — call it from ORM after-write hooks or anywhere
+   *     else you know exactly which ids changed.
+   *
+   * Per query bound to `collection`, semantics are:
+   *   - watch ref declares `idsOf` → only LRU entries whose extracted ids
+   *     include one of `ids` are dropped (`depsAll` entries — where extraction
+   *     failed — are dropped too; conservative). Sibling entries stay warm and
+   *     `stats().perQuery[name].idDrops` counts what was dropped.
+   *   - no `idsOf` on any bound ref → full purge of that query (the
+   *     `invalidateCollection` behavior — the safe default).
+   */
+  invalidateIds(collection: string, ids: readonly unknown[]): void {
+    if (ids.length === 0) return;
+    // Deps are stored namespaced (`${collection}${WATCH_SEP}${id}`) so
+    // multi-collection watchers never cross-invalidate — match that exact shape.
+    const changed = new Set<string>();
+    for (const id of ids) changed.add(`${collection}${WATCH_SEP}${normalizeWatchId(id)}`);
+    for (const q of this.queries.values()) {
+      const bound = q.config.watch?.filter((ref) => ref.collection === collection);
+      if (!bound || bound.length === 0) continue;
+      if (!bound.some((ref) => typeof ref.idsOf === 'function')) {
+        // No id-level extractor for this collection → keep the coarse contract.
+        q.lru.clear();
+        q.gen++;
+        continue;
+      }
+      let dropped = 0;
+      for (const [key, entry] of [...q.lru.entries()]) {
+        const matches =
+          entry.depsAll === true || entry.deps?.some((dep) => changed.has(dep)) === true;
+        if (matches) {
+          q.lru.delete(key);
+          dropped++;
+        }
+      }
+      q.idDrops += dropped;
+      // Unconditional race guard (even when nothing was dropped): an in-flight
+      // load for these args must never re-store a value fetched BEFORE the
+      // change event — otherwise a change landing mid-load would pin the old
+      // value in the cache with no TTL to rescue it.
+      q.gen++;
+    }
+  }
+
   /** Drop every cached entry for every query. */
   clear(): void {
     for (const q of this.queries.values()) {
@@ -249,9 +317,10 @@ export class HotCache {
 
   /**
    * Runtime observability snapshot: total queries/entries plus per-query
-   * counters (`hits`, `misses`, background `refreshes`, `loadErrors`, and
-   * `sizeSkips` for entries dropped by `maxValueBytes`). Useful for dashboards
-   * and cache-effectiveness checks.
+   * counters (`hits`, `misses`, background `refreshes`, `loadErrors`,
+   * `sizeSkips` for entries dropped by `maxValueBytes`, and `idDrops` for
+   * entries dropped by id-targeted invalidation). Useful for dashboards and
+   * cache-effectiveness checks.
    */
   stats(): HotCacheStats {
     const perQuery: Record<string, HotQueryStats> = {};
@@ -263,6 +332,7 @@ export class HotCache {
         refreshes: q.refreshes,
         loadErrors: q.loadErrors,
         sizeSkips: q.sizeSkips,
+        idDrops: q.idDrops,
         evictions: q.lru.evictions,
       };
     }
@@ -272,12 +342,20 @@ export class HotCache {
   /**
    * Probe replica support once, then start change-stream watchers (replica) or
    * the global refresh ticker (standalone). Idempotent — resolves the mode.
+   * A FAILED start does not stick: the memoized promise is cleared so the next
+   * `get()`/`start()` retries probing (one transient blip during startup must
+   * not disable background freshness for the life of the instance).
    */
   async start(): Promise<HotCacheMode> {
     if (this.disposed) return this._mode;
     if (this.started) return this._mode;
     if (!this.startPromise) {
-      this.startPromise = this.runStart();
+      this.startPromise = this.runStart().catch((err) => {
+        this.startPromise = undefined;
+        this.startAttempted = false;
+        this.started = false;
+        throw err;
+      });
     }
     return this.startPromise;
   }
@@ -344,13 +422,25 @@ export class HotCache {
   private defaultProbe = async (): Promise<boolean> => {
     for (const q of this.queries.values()) {
       for (const ref of q.config.watch ?? []) {
-        const caps = await probeMongoCapabilities(resolveWatchDb(ref));
+        let db: { databaseName: string };
+        try {
+          db = resolveWatchDb(ref);
+        } catch {
+          // Lazy accessor not ready (module-scope registration before connect)
+          // — treat as "unknown", not standalone.
+          this.logger.warn?.(
+            {},
+            'hot cache: replica probe could not resolve the watch db (accessor threw) — falling back to the standalone ticker; pass `mode` or a custom `probe` to pin the behavior',
+          );
+          return false;
+        }
+        const caps = await probeMongoCapabilities(db as never);
         if (!caps.probed) {
           // A timed-out/failed probe is NOT "confirmed standalone" — falling back
           // to the ticker silently could surprise replica users. Warn loudly so
           // they can pin the behavior with `mode` or a custom `probe`.
           this.logger.warn?.(
-            { db: resolveWatchDb(ref).databaseName },
+            { db: db.databaseName },
             'hot cache: replica probe returned no result (timeout?) — falling back to the standalone ticker; pass `mode` or a custom `probe` to pin the behavior',
           );
           return false;
@@ -367,7 +457,10 @@ export class HotCache {
     args: readonly unknown[],
     gen: number,
   ): Promise<unknown> {
-    const dedupeKey = `${q.name}${WATCH_SEP}${key}`;
+    // The generation is part of the dedup identity: a reader arriving AFTER an
+    // invalidation must start a FRESH load, never join the pre-invalidation
+    // in-flight one (whose result is stale-by-arrival for it).
+    const dedupeKey = `${q.name}${WATCH_SEP}g${gen}${WATCH_SEP}${key}`;
     return this.inflight.run<unknown>(dedupeKey, async () => {
       try {
         const value = await q.config.loader(...args);
@@ -375,12 +468,13 @@ export class HotCache {
         // was in flight, the result is stale-by-arrival — don't re-store it.
         // The caller still receives the value; the next read re-fetches.
         if (q.gen === gen) {
-          if (q.maxValueBytes !== undefined && estimateSize(value) > q.maxValueBytes) {
+          const bytes = q.maxValueBytes !== undefined ? estimateSize(value) : undefined;
+          if (bytes !== undefined && bytes > q.maxValueBytes!) {
             q.sizeSkips++;
             if (!q.warnedSize) {
               q.warnedSize = true;
               this.logger.warn?.(
-                { query: q.name, bytes: estimateSize(value), max: q.maxValueBytes },
+                { query: q.name, bytes, max: q.maxValueBytes },
                 'hot cache: value exceeds maxValueBytes — returned but not cached',
               );
             }
@@ -403,12 +497,44 @@ export class HotCache {
     value: unknown,
   ): void {
     const now = Date.now();
+    // Id-level watch: record which watched documents this result depends on, so
+    // `invalidateIds` (change stream or manual) can purge exactly these entries.
+    const deps = q.hasIdWatch ? this.computeDeps(q, args) : {};
     q.lru.set(key, {
       value,
       args,
       expiresAt: q.ttlMs > 0 ? now + q.ttlMs : Infinity,
       nextRefreshAt: q.refreshIntervalMs > 0 ? now + q.refreshIntervalMs : Infinity,
+      ...deps,
     });
+  }
+
+  /**
+   * Extract the watched-document dependencies of one loader call. Namespaced by
+   * collection so multi-collection watchers never cross-invalidate. An extractor
+   * that throws or returns a non-array yields `{ depsAll: true }` — the entry is
+   * then dropped by ANY targeted change on its watched collections instead of
+   * being incorrectly kept.
+   */
+  private computeDeps(
+    q: RegisteredQuery,
+    args: readonly unknown[],
+  ): Pick<Entry, 'deps' | 'depsAll'> {
+    const deps: string[] = [];
+    for (const ref of q.config.watch ?? []) {
+      if (!ref.idsOf) continue;
+      // The `never`-params declaration is contravariance-safe for writers; the
+      // runtime contract is that it accepts the loader's argument tuple.
+      const extract = ref.idsOf as (...args: readonly unknown[]) => readonly unknown[];
+      try {
+        const ids = extract(...args);
+        if (!Array.isArray(ids)) return { depsAll: true };
+        for (const id of ids) deps.push(`${ref.collection}${WATCH_SEP}${normalizeWatchId(id)}`);
+      } catch {
+        return { depsAll: true };
+      }
+    }
+    return { deps };
   }
 }
 

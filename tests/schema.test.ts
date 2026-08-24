@@ -31,7 +31,11 @@ describe('schema DSL → Mongo $jsonSchema', () => {
   test('maps scalar bsonTypes', () => {
     const p = vprops(userSchema);
     expect(p.email.bsonType).toBe('string');
-    expect(p.age.bsonType).toBe('int');
+    // Integral kinds accept every wire encoding the driver may emit for a
+    // JS number (int32 in-range → int, larger → double), with multipleOf: 1
+    // preserving server-side integrality.
+    expect(p.age.bsonType).toEqual(['int', 'long', 'double']);
+    expect(p.age.multipleOf).toBe(1);
     expect(p.balance.bsonType).toBe('number');
     expect(p.active.bsonType).toBe('bool');
     expect(p.createdAt.bsonType).toBe('date');
@@ -147,7 +151,7 @@ describe('schema DSL edge coverage (unit)', () => {
     expect(p.score.maximum).toBe(100);
     expect(p.temp.maximum).toBe(50);
     expect(p.temp.minimum).toBeUndefined();
-    expect(p.level.bsonType).toBe('int');
+    expect(p.level.bsonType).toEqual(['int', 'long', 'double']);
     expect(p.level.maximum).toBe(5);
   });
 
@@ -276,8 +280,11 @@ describe('schema DSL edge coverage (unit)', () => {
 
   test('strict BSON numeric kinds: double / long / decimal', () => {
     const p = vprops(s.object({ d: s.double({ minimum: 0 }), l: s.long(), dec: s.decimal() }));
-    expect(p.d.bsonType).toBe('double');
-    expect(p.l.bsonType).toBe('long');
+    // double accepts int/long wire encodings too ({rating: 5} encodes as int).
+    expect(p.d.bsonType).toEqual(['double', 'int', 'long']);
+    // long accepts int/double wire encodings; multipleOf: 1 keeps integrality.
+    expect(p.l.bsonType).toEqual(['long', 'int', 'double']);
+    expect(p.l.multipleOf).toBe(1);
     expect(p.dec.bsonType).toBe('decimal');
     expect(p.d.minimum).toBe(0);
   });

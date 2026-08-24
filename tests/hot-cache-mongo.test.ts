@@ -10,7 +10,7 @@
  * never masks HotCache behavior.
  */
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import type { Db } from 'mongodb';
+import type { Db, ObjectId } from 'mongodb';
 import { createHotCache } from '../src/cache/hot-cache/index.ts';
 import { sleep } from '../src/utils/timeout.ts';
 import {
@@ -471,6 +471,53 @@ maybeReplica('HotCache — real Mongo: replica change-stream integrity', () => {
       await sleepMs(50);
     }
     expect(current).toBe(before + 1);
+    await hot.stop();
+  });
+
+  test('idsOf targets invalidation to the changed document — sibling entries stay warm', async () => {
+    const hot = createHotCache({ probe: async () => true, logger: noopLogger });
+    let loads = 0;
+    const q = hot.register('productById', {
+      watch: [
+        {
+          db,
+          collection: 'products',
+          // Entries are keyed by document id, so each entry depends on exactly
+          // that document — extraction is pure over the loader arguments.
+          idsOf: (id: ObjectId) => [id],
+        },
+      ],
+      loader: async (id: ObjectId) => {
+        loads++;
+        return db.collection('products').findOne({ _id: id });
+      },
+    });
+    await hot.start();
+    expect(hot.mode).toBe('replica');
+    const idA = ctx.seed.productIds[0]!;
+    const idB = ctx.seed.productIds[1]!;
+    await q.get(idA);
+    await q.get(idB);
+    expect(loads).toBe(2);
+
+    // External write bypassing the ORM touches ONLY A's document. With plain
+    // collection watchers both entries would be purged; with idsOf only A's is.
+    await db.collection('products').updateOne({ _id: idA }, { $set: { stock: 4242 } });
+
+    // Change-stream delivery is async — poll until A reflects the write.
+    type ProductRow = { stock?: number } | null;
+    let freshA: ProductRow = null;
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      freshA = (await q.get(idA)) as ProductRow;
+      if (freshA?.stock === 4242) break;
+      await sleepMs(50);
+    }
+    expect(freshA?.stock).toBe(4242);
+    expect(loads).toBe(3); // exactly one extra load (A only)
+    expect(await q.get(idB)).toEqual(await db.collection('products').findOne({ _id: idB }));
+    expect(loads).toBe(3); // B stayed warm the whole time
+    expect(hot.stats().perQuery.productById!.idDrops).toBeGreaterThanOrEqual(1);
     await hot.stop();
   });
 });

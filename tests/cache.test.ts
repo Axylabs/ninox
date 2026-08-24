@@ -153,6 +153,36 @@ describe('QueryCache', () => {
     value.tags.push('b');
     expect((cache.get(key) as { tags: string[] }).tags).toEqual(['a', 'b']);
   });
+
+  test('capacity eviction unregisters the dead key from every collection index', () => {
+    const cache = new QueryCache({ maxSize: 1 });
+    // Entry registered under TWO collections (join pattern).
+    cache.set(cache.key('orders', 'j1'), 'v', undefined, ['customers']);
+    expect(cache.stats().size).toBe(1);
+    // Push a different entry into the same collection → LRU evicts the first.
+    cache.set(cache.key('orders', '2'), 'w');
+    expect(cache.get(cache.key('orders', 'j1'))).toBeUndefined();
+    expect(cache.stats().size).toBe(1);
+    // The evicted key must not linger in the customers index either: an
+    // invalidation of customers finds nothing (no leak, no dead scan work).
+    const statsBefore = cache.stats();
+    cache.invalidateByCollection('customers'); // nothing left to drop
+    expect(cache.stats()).toMatchObject({
+      invalidateEvents: statsBefore.invalidateEvents,
+      size: 1,
+    });
+  });
+
+  test('TTL expiry also unregisters the key (no dead index refs)', async () => {
+    const cache = new QueryCache({ ttlMs: 10 });
+    cache.set(cache.key('users', '1'), 'v', undefined, ['audit']);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(cache.get(cache.key('users', '1'))).toBeUndefined();
+    expect(cache.stats().size).toBe(0);
+    // Index is empty — invalidating does nothing.
+    cache.invalidateByCollection('audit');
+    expect(cache.stats().invalidateEvents).toBe(0);
+  });
 });
 
 describe('InFlight dedup', () => {

@@ -37,16 +37,22 @@ export interface QueryOptions {
    * a committed write whose ack was lost would be re-executed, so enable only
    * for idempotent writes). Default: off for write ops.
    */
-  retryWrites?: boolean /**
+  /**
+   * Per-op write-retry override. Reads always retry transient errors; writes
+   * retry ONLY when `retryWrites: true` (retrying a write is at-least-once —
+   * a committed write whose ack was lost would be re-executed, so enable only
+   * for idempotent writes). Default: off for write ops.
+   */
+  retryWrites?: boolean;
+  /**
    * Per-op schema-drift policy override for reads (see `MongoServiceConfig.drift`).
    * `true` → `'throw'`, `false` → `'off'`, or an explicit `DriftMode` string.
    * Unset inherits the service-level default (`'report'`). Only checked when a
    * document is fetched from the DB (cache-miss); projected/partial reads are
    * skipped.
-   */;
-  drift?:
-    | DriftMode
-    | boolean /** Driver-level options forwarded untouched to the underlying call. */;
+   */
+  drift?: DriftMode | boolean;
+  /** Driver-level options forwarded untouched to the underlying call. */
   collation?: CollationOptions;
   readPreference?: ReadPreferenceLike;
   readConcern?: ReadConcern;

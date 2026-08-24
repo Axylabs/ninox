@@ -2,7 +2,10 @@
  * Replica-mode change-stream watchers: one long-lived `$changeStream` consumer
  * per (database, collection); every data change invalidates the queries bound
  * to that collection (event-driven, works across processes and external
- * writers).
+ * writers). Document events are routed through `invalidateDocument` so queries
+ * with an `idsOf` extractor purge only the entries depending on that document;
+ * stream-wide events (drop/rename/invalidate) and reconnects invalidate the
+ * whole collection.
  *
  * A strategy object owned by `HotCache` (see `./index.ts`). The host supplies
  * the registered queries, per-collection invalidation, and the mode-fallback
@@ -34,7 +37,7 @@
  *     `ttlMs`/`refreshIntervalMs`. A consumer that never reconnects leaves
  *     entries stale forever unless TTL/refresh are set.
  */
-import type { ChangeStream } from 'mongodb';
+import type { ChangeStream, Db } from 'mongodb';
 import type { LoggerLike } from '../../utils/logger.ts';
 import { sleepJittered } from '../../utils/timeout.ts';
 import { isPermanentWatchError } from '../../utils/watch-errors.ts';
@@ -45,6 +48,12 @@ export interface WatchHost {
   queries: () => Map<string, RegisteredQuery>;
   /** Invalidate every query bound to a physical collection. */
   invalidateCollection: (collection: string) => void;
+  /**
+   * Invalidate only the entries that depend on one changed document (the
+   * change event's `documentKey._id`). The host decides per query whether it
+   * can target by id (`idsOf`) or must fall back to a coarse purge.
+   */
+  invalidateDocument: (collection: string, id: unknown) => void;
   /** Whether the cache is currently in replica mode (used before a fallback). */
   isReplica: () => boolean;
   /** Flip the cache to standalone mode + start the ticker (called after a total fallback). */
@@ -52,11 +61,43 @@ export interface WatchHost {
   logger: LoggerLike;
 }
 
+/**
+ * Resolve a lazy `db` accessor defensively: module-scope registrations commonly
+ * access connections that don't exist yet, so a THROW means "not available
+ * yet" — never let it escape into an unhandled rejection.
+ */
+const resolveDbSafe = (ref: HotCollectionRef, logger: LoggerLike): Db | null => {
+  try {
+    return resolveWatchDb(ref);
+  } catch (err) {
+    logger.debug?.(
+      { error: err instanceof Error ? err.message : String(err), collection: ref.collection },
+      'hot cache: watch db accessor not ready yet',
+    );
+    return null;
+  }
+};
+
+/**
+ * The `_id` of the document a change event touched, or `undefined` for
+ * stream-wide events (drop / dropDatabase / rename / invalidate) that carry no
+ * `documentKey` and must invalidate the whole collection. Real `_id` values are
+ * never undefined — but they CAN be falsy (`0`, `''`), hence the explicit
+ * null-check on the wrapper object instead of the id itself.
+ */
+const documentKeyOf = (change: unknown): unknown => {
+  const key = (change as { documentKey?: { _id?: unknown } | null } | null | undefined)
+    ?.documentKey;
+  return key ? key._id : undefined;
+};
+
 /** Long-lived change-stream coordinator for replica mode. */
 export class WatchCoordinator {
   private streams = new Map<string, ChangeStream>();
   private failedStreams = new Set<string>();
   private stopped = true;
+  /** Guards against stacking reconnect timers when several accessors lag. */
+  private reopenTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private host: WatchHost) {}
 
@@ -74,6 +115,7 @@ export class WatchCoordinator {
   /** Close every watcher and clear failure bookkeeping (idempotent). */
   async stop(): Promise<void> {
     this.stopped = true;
+    if (this.reopenTimer) clearTimeout(this.reopenTimer);
     const closes = [...this.streams.values()].map((stream) => {
       try {
         return Promise.resolve(stream.close()).catch(() => {});
@@ -88,13 +130,35 @@ export class WatchCoordinator {
 
   private openWatchStreams(): void {
     const seen = new Set<string>();
+    let deferred = false;
     for (const q of this.host.queries().values()) {
       for (const ref of q.config.watch ?? []) {
-        const key = `${resolveWatchDb(ref).databaseName}${WATCH_SEP}${ref.collection}`;
+        const db = resolveDbSafe(ref, this.host.logger);
+        // Accessor not ready yet (module-scope registration before connect):
+        // retry the whole sweep shortly instead of losing the stream forever.
+        if (!db) {
+          deferred = true;
+          continue;
+        }
+        const key = `${db.databaseName}${WATCH_SEP}${ref.collection}`;
         if (seen.has(key) || this.streams.has(key)) continue;
         seen.add(key);
-        void this.watchLoop(key, ref);
+        // The loop must NEVER float as an unhandled rejection — any escape
+        // from its catch handler would crash the process (Node ≥ 15).
+        void this.watchLoop(key, ref).catch((err) => {
+          this.host.logger.error?.(
+            { error: err instanceof Error ? err.message : String(err), collection: ref.collection },
+            'hot cache: watcher crashed',
+          );
+        });
       }
+    }
+    if (deferred && !this.stopped && !this.reopenTimer) {
+      this.reopenTimer = setTimeout(() => {
+        this.reopenTimer = undefined;
+        if (!this.stopped) this.openWatchStreams();
+      }, 5_000);
+      this.reopenTimer.unref?.();
     }
   }
 
@@ -110,10 +174,23 @@ export class WatchCoordinator {
   private async watchLoop(key: string, ref: HotCollectionRef): Promise<void> {
     let backoff = 0;
     while (!this.stopped) {
+      // A stream that stayed healthy for a long time before failing is an
+      // isolated blip — reset the escalation instead of converging to 5s
+      // forever (backoff is for repeated failures, not for uptime history).
+      let connectedAt = Date.now();
       try {
-        const stream = resolveWatchDb(ref).collection(ref.collection).watch([]);
-        stream.on('error', () => {});
+        const db = resolveDbSafe(ref, this.host.logger);
+        if (!db) throw new Error('watch db accessor not available');
+        const stream = db.collection(ref.collection).watch([]);
+        stream.on('error', (err: unknown) => {
+          // Prevent EventEmitter crashes between events; keep diagnostics.
+          this.host.logger.debug?.(
+            { error: err instanceof Error ? err.message : String(err) },
+            'hot cache change stream error event',
+          );
+        });
         this.streams.set(key, stream);
+        connectedAt = Date.now();
         if (backoff > 0) {
           // This stream is a RECONNECT after an error — changes made during the
           // outage were missed, so drop any entries they may have affected.
@@ -124,10 +201,18 @@ export class WatchCoordinator {
           this.host.invalidateCollection(ref.collection);
         }
         const iterator = stream[Symbol.asyncIterator]();
-        for await (const _change of iterator) {
-          this.host.invalidateCollection(ref.collection);
+        for await (const change of iterator) {
+          // Document events carry `documentKey._id` → targeted purge of just
+          // the entries depending on that document (queries without an
+          // `idsOf` extractor still get the coarse collection-wide drop, see
+          // HotCache.invalidateIds). Anything else (drop/rename/invalidate)
+          // purges the whole collection.
+          const docId = documentKeyOf(change);
+          if (docId === undefined) this.host.invalidateCollection(ref.collection);
+          else this.host.invalidateDocument(ref.collection, docId);
         }
       } catch (err) {
+        if (Date.now() - connectedAt > 60_000) backoff = 0;
         const message = err instanceof Error ? err.message : String(err);
         this.host.logger.warn?.(
           { error: message, collection: ref.collection },
@@ -175,7 +260,9 @@ export class WatchCoordinator {
     const set = new Set<string>();
     for (const q of this.host.queries().values()) {
       for (const ref of q.config.watch ?? []) {
-        set.add(`${resolveWatchDb(ref).databaseName}${WATCH_SEP}${ref.collection}`);
+        const db = resolveDbSafe(ref, this.host.logger);
+        if (!db) continue; // accessor not ready — not a "failed" stream
+        set.add(`${db.databaseName}${WATCH_SEP}${ref.collection}`);
       }
     }
     return set;

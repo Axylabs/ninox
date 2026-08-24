@@ -25,8 +25,8 @@ import type {
   ExtractDbNames,
 } from '../../types.ts';
 import { stableHash } from '../../utils/hash.ts';
-import { stripUndefinedFromUpdate, stripUndefinedKeys } from '../../utils/omit-undefined.ts';
 import type { LoggerLike } from '../../utils/logger.ts';
+import { stripUndefinedFromUpdate, stripUndefinedKeys } from '../../utils/omit-undefined.ts';
 import { defineCrudOp } from '../crud-op.ts';
 import { checkDocsDrift } from '../drift.ts';
 import { makeOpDeps } from '../op-deps.ts';
@@ -144,6 +144,8 @@ export interface CrudContext<
     options: QueryOptions | undefined,
     execute: (resolved: ResolvedQueryOptions) => Promise<T>,
     shape?: 'one' | 'many' | 'none',
+    /** Extra key discriminator (e.g. `distinct`'s field name). */
+    keyExtra?: string,
   ) => Promise<T>;
   /** Translate `select` (field list) into a driver `projection`; strip `select`. */
   normalizeFindOptions: <T>(options: FindQueryOptions<T> | undefined) => FindOptions & QueryOptions;
@@ -248,6 +250,7 @@ export const createCrudContext = <
     options: QueryOptions | undefined,
     execute: (resolved: ResolvedQueryOptions) => Promise<T>,
     shape: 'one' | 'many' | 'none' = 'none',
+    keyExtra?: string,
   ): Promise<T> => {
     const physical = resolve(String(collection));
     const resolved = resolveQueryOptions(options);
@@ -294,11 +297,40 @@ export const createCrudContext = <
         }),
       );
 
+    // Hash ONCE and reuse for both the cache key and the dedup key.
+    // The op name is part of the identity — `getOne`/`countDocuments`/`distinct`
+    // on the same filter return different SHAPES, so they must never share a
+    // cache entry (`distinct` also namespaces by its field). Pure retry/dedup
+    // knobs are stripped so they can't fragment the cache; `drift` STAYS
+    // because it changes read SEMANTICS (a 'throw' request must never be
+    // served an entry that was cached under 'off'/'report' without
+    // validation), and everything result-affecting (driver opts, session)
+    // stays too. Computed LAZILY: session reads use neither cache nor dedup,
+    // so their options (containing cyclic ClientSession objects) are never
+    // serialized at all.
+    const {
+      maxAttempts: _ma,
+      retryDelayMs: _rd,
+      dedupe: _dd,
+      cache: _ca,
+      retryWrites: _rw,
+      ...resultOptions
+    } = (options ?? {}) as QueryOptions;
+    void _ma;
+    void _rd;
+    void _dd;
+    void _ca;
+    void _rw;
+    let payloadHash: string | undefined;
+    const getPayloadHash = (): string => {
+      if (payloadHash === undefined) {
+        payloadHash = stableHash([opName, keyExtra ?? '', filter, resultOptions]);
+      }
+      return payloadHash;
+    };
+
     const key = useCache
-      ? opts.cache!.key(
-          cacheCollectionKey(client.databaseName, physical),
-          stableHash([filter, options]),
-        )
+      ? opts.cache!.key(cacheCollectionKey(client.databaseName, physical), getPayloadHash())
       : undefined;
 
     // Execution is created lazily so in-flight dedup can share ONE underlying
@@ -326,8 +358,12 @@ export const createCrudContext = <
     };
 
     if (shouldDedupe) {
-      const dedupeKey = `${cacheCollectionKey(client.databaseName, physical)}|${opName}|${stableHash([filter, options])}`;
-      return opts.inFlight!.run(dedupeKey, runOnce);
+      // The collection VERSION is part of the dedup identity: a reader arriving
+      // after a write invalidated the collection must start a FRESH load, never
+      // join the pre-invalidation in-flight promise (mirrors HotCache's gen).
+      const colKey = cacheCollectionKey(client.databaseName, physical);
+      const gen = opts.cache !== undefined ? opts.cache.versionOf(colKey) : '';
+      return opts.inFlight!.run(`${colKey}|${gen}|${getPayloadHash()}`, runOnce);
     }
     return runOnce();
   };

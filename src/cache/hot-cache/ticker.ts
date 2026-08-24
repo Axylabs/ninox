@@ -22,6 +22,9 @@ export interface TickerHost {
   logger: LoggerLike;
 }
 
+/** Max loader kicks a single tick may launch (stampede guard after downtime). */
+const MAX_TICK_INFLIGHT = 64;
+
 /** Global standalone refresh ticker. Owns the timer; stops cleanly via `stop()`. */
 export class RefreshTicker {
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -65,17 +68,29 @@ export class RefreshTicker {
     }
   }
 
-  /** Background refresh pass: re-run loaders for due entries, swap fresh values. */
+  /**
+   * Background refresh pass: re-run loaders for due entries, swap fresh values.
+   * A per-tick in-flight budget bounds the stampede after downtime/throttling —
+   * one sweep can't launch unbounded simultaneous loaders across all queries;
+   * skipped entries stay due and are picked up by the next tick.
+   */
   private tick(): void {
     const now = Date.now();
+    let budget = MAX_TICK_INFLIGHT;
     for (const q of this.host.queries().values()) {
       if (q.refreshIntervalMs <= 0) continue;
       for (const [key, entry] of [...q.lru.entries()]) {
         if (entry.nextRefreshAt <= now) {
+          if (budget <= 0) return;
+          budget--;
+          // Claim the slot BEFORE kicking so duplicate ticks joining the same
+          // in-flight load don't inflate the refreshes counter; on failure the
+          // catch resets `nextRefreshAt` (to `now`, not tick-start time).
+          entry.nextRefreshAt = now + q.refreshIntervalMs;
           q.refreshes++;
           void this.host.fetch(q, key, entry.args, q.gen).catch((err) => {
             const current = q.lru.peek(key);
-            if (current) current.nextRefreshAt = now + q.refreshIntervalMs;
+            if (current) current.nextRefreshAt = Date.now();
             this.host.logger.warn?.(
               {
                 error: err instanceof Error ? err.message : String(err),

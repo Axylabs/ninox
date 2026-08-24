@@ -5,6 +5,7 @@
  * without importing each other's runtime logic.
  */
 import type { Db } from 'mongodb';
+import { stableStringify } from '../../utils/hash.ts';
 import type { LoggerLike } from '../../utils/logger.ts';
 import type { LRU } from '../../utils/lru.ts';
 
@@ -22,11 +23,53 @@ export interface HotCollectionRef {
   db: Db | (() => Db);
   /** Physical collection name whose writes invalidate bound queries. */
   collection: string;
+  /**
+   * Fine-tuned invalidation: extract the document ids (or groups of ids) that
+   * one loader call's arguments depend on. Without this, ANY write to the
+   * collection purges every entry of every query bound to it; with it, a
+   * change-stream event (replica mode) or a manual
+   * `invalidateIds(collection, [id])` call purges ONLY the entries that
+   * extracted this id — sibling entries stay warm.
+   *
+   * Return every id the result depends on (one per document, or many for
+   * grouped/aggregated results). Ids may be strings, numbers, ObjectIds… —
+   * they are compared after stable normalization, so an ObjectId and its hex
+   * string match.
+   *
+   * Must be pure and cheap (it runs once per load). If it throws or returns a
+   * non-array the entry is marked conservative: it is dropped by ANY targeted
+   * change on that collection instead of being kept incorrectly.
+   *
+   * Typed as `never`-params (contravariance-safe, same trick as `LRU`'s
+   * `onEvict`): declare your own parameter types and they line up with the
+   * query's loader args — `idsOf: (team: string) => members(team)`.
+   */
+  idsOf?: (...args: never) => readonly unknown[];
 }
 
 /** Resolve a possibly-lazy collection ref to its live `Db` handle. */
 export const resolveWatchDb = (ref: HotCollectionRef): Db =>
-  typeof ref.db === "function" ? (ref.db as () => Db)() : ref.db;
+  typeof ref.db === 'function' ? (ref.db as () => Db)() : ref.db;
+
+/**
+ * Normalize a watched document id into a comparable key so an id passed to
+ * `invalidateIds` matches the same id extracted by `idsOf` regardless of
+ * representation: an ObjectId and its 24-char hex string collapse to the same
+ * key, numbers/bigints to their decimal form, Dates to an epoch marker.
+ * Anything else falls back to a stable serialization. Over-matching is safe by
+ * design — worst case one extra entry is purged.
+ */
+export const normalizeWatchId = (id: unknown): string => {
+  if (typeof id === 'string') return id;
+  if (typeof id === 'number' || typeof id === 'bigint') return String(id);
+  if (id instanceof Date) return `d${id.getTime()}`;
+  const hex =
+    typeof id === 'object' && id !== null
+      ? (id as { toHexString?: () => string }).toHexString
+      : undefined;
+  if (typeof hex === 'function') return hex.call(id); // ObjectId → hex string
+  return stableStringify(id);
+};
 
 /** Opt-in query registration. `TArgs` = the parameter tuple, `TResult` = loader result. */
 export interface HotQueryConfig<TArgs extends readonly unknown[], TResult> {
@@ -130,6 +173,19 @@ export interface Entry {
   args: readonly unknown[];
   expiresAt: number;
   nextRefreshAt: number;
+  /**
+   * Namespaced watched-document dependencies (`${collection}${WATCH_SEP}${id}`)
+   * extracted via each watch ref's `idsOf` at store time — what id-targeted
+   * invalidation matches against. Empty = the extractor listed no ids for this
+   * call, so targeted changes keep the entry (TTL/ticker/manual still apply).
+   */
+  deps?: readonly string[];
+  /**
+   * Conservative marker set when dependency extraction threw or returned a
+   * non-array: the entry is dropped by ANY targeted change on its watched
+   * collections (never kept incorrectly).
+   */
+  depsAll?: boolean;
 }
 
 /** Runtime state for one registered query (owned by `HotCache`, mutated by ticker/watcher). */
@@ -141,6 +197,8 @@ export interface RegisteredQuery {
   refreshIntervalMs: number;
   clone: boolean;
   maxValueBytes?: number;
+  /** Precomputed at register time: any watch ref declares an `idsOf` extractor. */
+  hasIdWatch: boolean;
   /** Bumped on every invalidation/clear so in-flight loads don't re-store stale data. */
   gen: number;
   hits: number;
@@ -148,6 +206,8 @@ export interface RegisteredQuery {
   refreshes: number;
   loadErrors: number;
   sizeSkips: number;
+  /** Entries dropped by id-targeted invalidation (`invalidateIds` / change events). */
+  idDrops: number;
   warnedSize: boolean;
 }
 
@@ -165,6 +225,8 @@ export interface HotQueryStats {
   loadErrors: number;
   /** Values too large to cache (`maxValueBytes`). */
   sizeSkips: number;
+  /** Entries dropped by id-targeted invalidation (`invalidateIds` / change events). */
+  idDrops: number;
   /** Capacity evictions (LRU). */
   evictions: number;
 }

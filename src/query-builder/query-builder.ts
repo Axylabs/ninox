@@ -8,6 +8,7 @@ import type {
   Sort,
   WithId,
 } from 'mongodb';
+import { BadRequest } from '../errors/index.ts';
 import type { QueryOptions } from '../service/query-options.ts';
 import { DEFAULT_FIND_LIMIT } from '../shared/constants.ts';
 import type { FilterInput } from '../shared/filter-types.ts';
@@ -29,16 +30,38 @@ export interface QueryBuilderContext<TDoc extends Document> {
 }
 
 /**
- * Lazy, fluent, schema-typed query builder. Nothing hits the database until an
- * executor (`one`/`many`/`cursor`/`count`/`exists`) is called. Projections via
- * `select` are pushed to the driver so only requested fields are transferred.
+ * Merge an incoming filter into the current one WITHOUT silently dropping
+ * clauses: plain-object values are treated as operator documents
+ * (`{ $gte: 18 }`) and deep-merged per key so
+ * `.where({ age: { $gte: 18 } }).where({ age: { $lte: 65 } })`
+ * yields `{ age: { $gte: 18, $lte: 65 } }` instead of losing the `$gte`.
+ * Scalars/arrays replace (last write wins), matching Mongo semantics.
+ */
+const mergeFilterKey = (prev: unknown, next: unknown): unknown => {
+  if (
+    prev !== null &&
+    typeof prev === 'object' &&
+    !Array.isArray(prev) &&
+    next !== null &&
+    typeof next === 'object' &&
+    !Array.isArray(next)
+  ) {
+    return { ...(prev as Document), ...(next as Document) };
+  }
+  return next;
+};
+
+/**
+ * Lazy, fluent, IMMUTABLE, schema-typed query builder. Every chain method
+ * returns a NEW builder — a stored base query can be safely reused as a
+ * template without derived chains contaminating it:
  *
- *   await users.query('users')
- *     .where({ role: 'admin' })
- *     .sort({ createdAt: -1 })
- *     .select(['_id', 'email'])
- *     .limit(20)
- *     .many();
+ *   const admins = users.query('users').where({ role: 'admin' });
+ *   await admins.where({ age: { $gte: 18 } }).many(); // base unchanged
+ *
+ * Nothing hits the database until an executor (`one`/`many`/`cursor`/`count`/
+ * `exists`) is called. Projections via `select` are pushed to the driver so
+ * only requested fields are transferred.
  */
 export class QueryBuilder<TDoc extends Document, TSelection = TDoc> {
   private _filter: FilterInput<TDoc> = {};
@@ -54,92 +77,132 @@ export class QueryBuilder<TDoc extends Document, TSelection = TDoc> {
     return this._filter;
   }
 
-  /** Shallow-merge a filter into the current one (later keys win). */
-  where(filter: FilterInput<TDoc>): this {
-    this._filter = { ...this._filter, ...filter };
-    return this;
+  /** Copy-on-write fork used by every chain method. */
+  private fork(): QueryBuilder<TDoc, TSelection> {
+    const next = new QueryBuilder<TDoc, TSelection>(this.ctx);
+    next._filter = this._filter;
+    if (this._sort !== undefined) next._sort = this._sort;
+    if (this._skip !== undefined) next._skip = this._skip;
+    if (this._limit !== undefined) next._limit = this._limit;
+    if (this._projection !== undefined) next._projection = this._projection;
+    next._options = { ...this._options };
+    return next;
   }
 
-  /** AND-combine the current filter with a new one. */
-  and(filter: FilterInput<TDoc>): this {
-    this._filter = { $and: [this._filter, filter] } as FilterInput<TDoc>;
-    return this;
+  /** Merge a filter into the current one (operator docs deep-merge per key). */
+  where(filter: FilterInput<TDoc>): QueryBuilder<TDoc, TSelection> {
+    const next = this.fork();
+    const merged: Document = { ...(next._filter as Document) };
+    for (const [key, value] of Object.entries(filter as Document)) {
+      merged[key] = key in merged ? mergeFilterKey(merged[key], value) : value;
+    }
+    next._filter = merged as FilterInput<TDoc>;
+    return next;
   }
 
-  /** OR-combine: current filter AND (filter1 OR filter2 ...). */
-  or(...filters: Array<FilterInput<TDoc>>): this {
-    this._filter = { $and: [this._filter, { $or: filters }] } as FilterInput<TDoc>;
-    return this;
+  /** AND-combine the current filter with a new one (stays flat across repeats). */
+  and(filter: FilterInput<TDoc>): QueryBuilder<TDoc, TSelection> {
+    const next = this.fork();
+    const current = next._filter as Document;
+    const existing = Array.isArray(current.$and)
+      ? (current.$and as Document[])
+      : Object.keys(current).length > 0
+        ? [current]
+        : [];
+    next._filter = { $and: [...existing, filter] } as unknown as FilterInput<TDoc>;
+    return next;
+  }
+
+  /**
+   * OR-combine: current filter AND (filter1 OR filter2 ...). Requires at least
+   * one filter — an empty `$or` is rejected by the server.
+   */
+  or(...filters: Array<FilterInput<TDoc>>): QueryBuilder<TDoc, TSelection> {
+    if (filters.length === 0) {
+      throw new BadRequest('QueryBuilder.or() requires at least one filter');
+    }
+    return this.and((filters.length === 1 ? filters[0]! : { $or: filters }) as FilterInput<TDoc>);
   }
 
   /** Set the sort order (`{ field: 1 | -1 }`). */
-  sort(sort: Sort): this {
-    this._sort = sort;
-    return this;
+  sort(sort: Sort): QueryBuilder<TDoc, TSelection> {
+    const next = this.fork();
+    next._sort = sort;
+    return next;
   }
 
   /** Skip the first `n` matching documents. */
-  skip(n: number): this {
-    this._skip = n;
-    return this;
+  skip(n: number): QueryBuilder<TDoc, TSelection> {
+    const next = this.fork();
+    next._skip = n;
+    return next;
   }
 
   /** Limit the result set to `n` documents. */
-  limit(n: number): this {
-    this._limit = n;
-    return this;
+  limit(n: number): QueryBuilder<TDoc, TSelection> {
+    const next = this.fork();
+    next._limit = n;
+    return next;
   }
 
   /** Project only the given fields — the projection is pushed to the driver. */
   select<const K extends keyof TSelection>(
     fields: readonly K[],
   ): QueryBuilder<TDoc, Pick<TSelection, K>> {
+    const next = this.fork() as unknown as QueryBuilder<TDoc, Pick<TSelection, K>>;
     const projection: Record<string, 1> = {};
     for (const field of fields) projection[field as string] = 1;
-    this._projection = projection;
-    return this as unknown as QueryBuilder<TDoc, Pick<TSelection, K>>;
+    (next as unknown as { _projection?: Document })._projection = projection;
+    return next;
   }
 
   /** Raw projection document (`{ field: 1 }` / `{ field: 0 }`). */
-  project(projection: Document): this {
-    this._projection = projection;
-    return this;
+  project(projection: Document): QueryBuilder<TDoc, TSelection> {
+    const next = this.fork();
+    next._projection = projection;
+    return next;
   }
 
   /** Set the index hint. */
-  hint(hint: Hint): this {
-    this._options.hint = hint;
-    return this;
+  hint(hint: Hint): QueryBuilder<TDoc, TSelection> {
+    const next = this.fork();
+    next._options.hint = hint;
+    return next;
   }
 
   /** Set the driver cursor batch size. */
-  batchSize(n: number): this {
-    this._options.batchSize = n;
-    return this;
+  batchSize(n: number): QueryBuilder<TDoc, TSelection> {
+    const next = this.fork();
+    next._options.batchSize = n;
+    return next;
   }
 
   /** Run the query inside a transaction session. */
-  session(session: NonNullable<QueryOptions['session']>): this {
-    this._options.session = session;
-    return this;
+  session(session: NonNullable<QueryOptions['session']>): QueryBuilder<TDoc, TSelection> {
+    const next = this.fork();
+    next._options.session = session;
+    return next;
   }
 
   /** Cap server-side execution time. */
-  maxTimeMS(ms: number): this {
-    this._options.maxTimeMS = ms;
-    return this;
+  maxTimeMS(ms: number): QueryBuilder<TDoc, TSelection> {
+    const next = this.fork();
+    next._options.maxTimeMS = ms;
+    return next;
   }
 
   /** Bypass the read cache for this query when `false`. */
-  cache(on: boolean): this {
-    this._options.cache = on;
-    return this;
+  cache(on: boolean): QueryBuilder<TDoc, TSelection> {
+    const next = this.fork();
+    next._options.cache = on;
+    return next;
   }
 
   /** Override in-flight dedup for this query when set. */
-  dedupe(on: boolean): this {
-    this._options.dedupe = on;
-    return this;
+  dedupe(on: boolean): QueryBuilder<TDoc, TSelection> {
+    const next = this.fork();
+    next._options.dedupe = on;
+    return next;
   }
 
   /** Compile the builder into driver options (does not execute). */
@@ -191,7 +254,7 @@ export class QueryBuilder<TDoc extends Document, TSelection = TDoc> {
     );
   }
 
-  /** Streaming cursor (raw driver cursor; no retry, applies batchSize). */
+  /** Streaming cursor (raw driver cursor; no retry/cache/drift — caller-owned). */
   cursor(): FindCursor<WithId<TDoc>> {
     return this.ctx.collection.find(
       this._filter as unknown as Filter<TDoc>,
@@ -209,8 +272,21 @@ export class QueryBuilder<TDoc extends Document, TSelection = TDoc> {
     );
   }
 
-  /** True when at least one document matches. */
+  /** True when at least one document matches (`_id`-only projection — no doc transfer). */
   async exists(): Promise<boolean> {
-    return (await this.one()) !== null;
+    const options = this.compile();
+    if (options.limit === undefined) options.limit = 1;
+    options.projection = { _id: 1 };
+    const doc = await this.ctx.run<WithId<TDoc> | null>(
+      'mongo.exists',
+      this._filter,
+      (opts) =>
+        this.ctx.collection.findOne(
+          this._filter as unknown as Filter<TDoc>,
+          opts,
+        ) as unknown as Promise<WithId<TDoc> | null>,
+      options,
+    );
+    return doc !== null;
   }
 }

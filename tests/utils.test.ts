@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { Decimal128, Long, MaxKey, MinKey, ObjectId, Timestamp } from 'mongodb';
 import {
   BadRequest,
   DomainError,
@@ -11,6 +12,8 @@ import { withRetry } from '../src/mongo-helpers.ts';
 import { defineCrudOp } from '../src/service/crud-op.ts';
 import type { DbOpMeta } from '../src/service/trace-db-op.ts';
 import { formatUpdateFilter, hasUpdateOperator } from '../src/service/update-format.ts';
+import { mergeMongoFilters } from '../src/shared/merge-filters.ts';
+import { cloneDeep } from '../src/utils/clone.ts';
 import { stableHash, stableStringify } from '../src/utils/hash.ts';
 import { LRU } from '../src/utils/lru.ts';
 import { createCachedAsyncFactory, createCachedFactory } from '../src/utils/memoize.ts';
@@ -25,6 +28,45 @@ describe('LRU', () => {
     expect(lru.get(1)).toBe('a');
     expect(lru.get(2)).toBeUndefined();
     expect(lru.get(3)).toBe('c');
+  });
+});
+
+describe('cloneDeep', () => {
+  test('clones Map/Set/Buffer/typed arrays by type, not into {}', () => {
+    const map = new Map([['a', { n: 1 }]]);
+    const set = new Set([{ x: 2 }]);
+    const buf = Buffer.from('abc');
+    const u32 = new Uint32Array([4, 5]);
+    const cloned = cloneDeep({ map, set, buf, u32 });
+    expect(cloned.map).toBeInstanceOf(Map);
+    expect(cloned.map).not.toBe(map);
+    expect(cloned.map.get('a')).toEqual({ n: 1 });
+    expect(cloned.map.get('a')).not.toBe(map.get('a'));
+    expect(cloned.set).toBeInstanceOf(Set);
+    expect([...cloned.set][0]).toEqual({ x: 2 });
+    expect(Buffer.isBuffer(cloned.buf)).toBe(true);
+    expect(cloned.buf.toString()).toBe('abc');
+    expect(cloned.u32).toBeInstanceOf(Uint32Array);
+    expect([...cloned.u32]).toEqual([4, 5]);
+  });
+
+  test('round-trips BSON wrappers exactly (incl. Timestamp bit-exactness)', () => {
+    const ts = Timestamp.fromBits(123456789, 987654321);
+    const doc = {
+      oid: new ObjectId('507f1f77bcf86cd799439011'),
+      dec: Decimal128.fromString('9.999999999'),
+      long: Long.fromString('9007199254740993'),
+      min: new MinKey(),
+      max: new MaxKey(),
+      ts,
+    };
+    const c = cloneDeep(doc);
+    expect(c.oid.toHexString()).toBe(doc.oid.toHexString());
+    expect(c.dec.toString()).toBe('9.999999999');
+    expect(c.long.toString()).toBe('9007199254740993');
+    expect(c.min).toBeInstanceOf(MinKey);
+    expect(c.max).toBeInstanceOf(MaxKey);
+    expect(c.ts.equals(ts)).toBe(true);
   });
 });
 
@@ -126,6 +168,28 @@ describe('error mapping', () => {
     expect(mapped).toBeInstanceOf(DomainError);
     expect(mapped.code).toBe('DUPLICATE_KEY');
     expect(mapped.extra?.keyPattern).toEqual({ email: 1 });
+  });
+
+  test('bulk dup-key message does not leak stored values from raw errmsg', () => {
+    const bulk = {
+      name: 'MongoBulkWriteError',
+      message: 'bulk write failed',
+      writeErrors: [
+        {
+          index: 0,
+          code: 11000,
+          errmsg:
+            'E11000 duplicate key error collection: app.users dup key: { email: "victim@x.com" }',
+          keyPattern: { email: 1 },
+          keyValue: { email: 'victim@x.com' },
+        },
+      ],
+    };
+    const mapped = mapMongoDriverError(bulk) as DomainError;
+    expect(mapped.code).toBe('DUPLICATE_KEY');
+    expect(mapped.message).toBe('Duplicate key error');
+    expect(mapped.message).not.toContain('victim@x.com');
+    expect(mapped.extra?.keyValue).toEqual({ email: 'victim@x.com' });
   });
 
   test('maps timeout', () => {
@@ -315,6 +379,80 @@ describe('omit-undefined (write payloads never serialize undefined as null)', ()
   test('non-object payloads pass through untouched', () => {
     const { stripUndefinedFromUpdate } = strip;
     expect(stripUndefinedFromUpdate(null)).toBeNull();
-    expect(stripUndefinedFromUpdate('x' as never)).toBe('x');
+    const passthrough: unknown = stripUndefinedFromUpdate('x' as never);
+    expect(passthrough).toBe('x');
+  });
+});
+
+describe('hash strength (dual-round digest)', () => {
+  test('deterministic and order-insensitive', () => {
+    expect(stableHash({ a: 1, b: 2 })).toBe(stableHash({ b: 2, a: 1 }));
+    expect(stableHash('x')).toBe(stableHash('x'));
+  });
+
+  test('distinct inputs never share a digest (64-bit space)', () => {
+    // The old single-round djb2 collided on such pairs under churn; the
+    // dual-round digest spreads across ~64 bits.
+    const seen = new Set<string>();
+    for (let i = 0; i < 2000; i++) {
+      const h = stableHash({ q: i, filter: `f${i}` });
+      expect(seen.has(h)).toBe(false);
+      seen.add(h);
+    }
+  });
+
+  test('structurally different filters hash differently (boundary safety)', () => {
+    expect(stableHash(['a|b', 'c'])).not.toBe(stableHash(['a', 'b|c']));
+    expect(stableHash([[], 'x'])).not.toBe(stableHash([['x']]));
+  });
+});
+
+describe('mergeMongoFilters operator-aware merge', () => {
+  test('operator documents deep-merge instead of dropping clauses', () => {
+    const merged = merge({ role: 'admin', age: { $gte: 18 } }, { age: { $lte: 65 } });
+    expect(merged).toEqual({ role: 'admin', age: { $gte: 18, $lte: 65 } });
+  });
+
+  test('$and / $or branches concatenate instead of overwriting', () => {
+    const merged = merge({ $or: [{ a: 1 }] }, { $or: [{ b: 2 }], c: 3 });
+    expect(merged).toEqual({ $or: [{ a: 1 }, { b: 2 }], c: 3 });
+  });
+});
+
+describe('canonicalKey plain objects', () => {
+  test('distinct objects no longer collapse to "[object Object]"', async () => {
+    const { canonicalKey } = await import('../src/loader/dataloader.ts');
+    expect(canonicalKey({ b: 2, a: 1 })).toBe(canonicalKey({ a: 1, b: 2 }));
+    expect(canonicalKey({ a: 1 })).not.toBe(canonicalKey({ a: 2 }));
+    expect(canonicalKey({ a: 1 })).toMatch(/^obj:/);
+  });
+});
+
+function merge(...parts: Array<Record<string, unknown> | undefined>): Record<string, unknown> {
+  return mergeMongoFilters(
+    ...(parts as Array<Parameters<typeof mergeMongoFilters>[0] | undefined>),
+  ) as Record<string, unknown>;
+}
+
+describe('estimateSize coverage', () => {
+  test('Map / Set / Buffer are measured (no 0-byte guard bypass)', async () => {
+    const { estimateSize } = await import('../src/cache/hot-cache/size.ts');
+    expect(estimateSize(new Map([['k', 'v']]))).toBeGreaterThan(0);
+    expect(estimateSize(new Set(['a', 'b']))).toBeGreaterThan(estimateSize(new Set(['a'])));
+    const buf = Buffer.alloc(1024);
+    // ~1KB measured as ~1KB — not the old 10× object-entry inflation.
+    expect(estimateSize(buf)).toBeLessThan(2048);
+    expect(estimateSize(buf)).toBeGreaterThan(512);
+  });
+
+  test('cyclic structures are safe (no stack overflow)', async () => {
+    const { estimateSize } = await import('../src/cache/hot-cache/size.ts');
+    const a: Record<string, unknown> = { name: 'a' };
+    a.self = a;
+    expect(() => estimateSize(a)).not.toThrow();
+    expect(estimateSize(a)).toBeGreaterThan(0);
+    const nested: Array<unknown> = [];
+    nested.push(nested);
+    expect(estimateSize(nested)).toBeGreaterThan(0);
   });
 });

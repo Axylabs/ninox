@@ -61,7 +61,14 @@ export class CacheInvalidator {
       const key = `${ref.db.databaseName}${SEP}${ref.collection}`;
       if (seen.has(key) || this.streams.has(key)) continue;
       seen.add(key);
-      void this.watchLoop(key, ref);
+      // Never float as an unhandled rejection — an escape from the loop's
+      // catch handler would crash the process.
+      void this.watchLoop(key, ref).catch((err) => {
+        this.logger.error?.(
+          { error: err instanceof Error ? err.message : String(err), collection: ref.collection },
+          'cacheWatch: watcher crashed',
+        );
+      });
     }
   }
 
@@ -82,10 +89,20 @@ export class CacheInvalidator {
   private async watchLoop(key: string, ref: CacheInvalidationRef): Promise<void> {
     let backoff = 0;
     while (!this.stopped) {
+      // A stream healthy for a long stretch before failing is an isolated
+      // blip — reset escalation (backoff is for REPEATED failures).
+      let connectedAt = Date.now();
       try {
         const stream = ref.db.collection(ref.collection).watch([]);
-        stream.on('error', () => {});
+        // Prevent EventEmitter crashes between events; keep diagnostics.
+        stream.on('error', (err) => {
+          this.logger.debug?.(
+            { error: err instanceof Error ? err.message : String(err) },
+            'cacheWatch: stream error event',
+          );
+        });
         this.streams.set(key, stream);
+        connectedAt = Date.now();
         if (backoff > 0) {
           // Reconnect after an outage: changes during the gap were missed, so
           // drop the collection's cache to force a re-fetch on the next read.
@@ -100,6 +117,7 @@ export class CacheInvalidator {
           );
         }
       } catch (err) {
+        if (Date.now() - connectedAt > 60_000) backoff = 0;
         const message = err instanceof Error ? err.message : String(err);
         const abandoned = this.streams.get(key);
         this.streams.delete(key);

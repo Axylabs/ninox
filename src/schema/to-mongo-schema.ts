@@ -35,6 +35,26 @@ const addNumericBounds = (
   return out;
 };
 
+/**
+ * The Node driver picks the BSON wire type for a plain JS `number` by VALUE:
+ * integral values in int32 range serialize as `int`, everything else as
+ * `double` (and explicit `Long` instances as `long`). A single-type
+ * `bsonType` therefore rejects perfectly type-correct TS values — e.g.
+ * `bsonType: 'int'` rejects 3_000_000_000 (encoded as double), and
+ * `bsonType: 'double'` rejects `{ rating: 5 }` (encoded as int). Numeric
+ * kinds must accept every wire encoding their TS type can produce:
+ *   - `double`  → ['double','int','long']  (any IEEE value the driver emits)
+ *   - `integer` → ['int','long','double'] + multipleOf: 1
+ *   - `long`    → ['long','int','double'] + multipleOf: 1
+ * For the integral kinds `multipleOf: 1` preserves SERVER-side integrality
+ * enforcement that a bare double member of the union would otherwise lose.
+ */
+const NUMERIC_WIRE_UNION: Record<'double' | 'long', string[]> = {
+  double: ['double', 'int', 'long'],
+  long: ['long', 'int', 'double'],
+};
+const INTEGER_WIRE_UNION = ['int', 'long', 'double'];
+
 const convertField = (field: SchemaType): MongoJsonSchema => {
   // Raw escape hatch: pass the fragment through verbatim. A `description` on
   // the DSL field is merged only when the fragment doesn't already carry one.
@@ -59,13 +79,17 @@ const convertField = (field: SchemaType): MongoJsonSchema => {
       // DSL option remains accepted for authoring intent, but it is a no-op here.
       return out;
     case 'number':
-      out.bsonType = field.integer ? 'int' : 'number';
+      out.bsonType = field.integer ? [...INTEGER_WIRE_UNION] : 'number';
+      // Server-side integrality: the double member of the union would accept
+      // fractional values — `multipleOf: 1` rejects them again.
+      if (field.integer && field.multipleOf === undefined) out.multipleOf = 1;
       return addNumericBounds(out, field);
     case 'double':
-      out.bsonType = 'double';
+      out.bsonType = [...NUMERIC_WIRE_UNION.double];
       return addNumericBounds(out, field);
     case 'long':
-      out.bsonType = 'long';
+      out.bsonType = [...NUMERIC_WIRE_UNION.long];
+      if (field.multipleOf === undefined) out.multipleOf = 1;
       return addNumericBounds(out, field);
     case 'decimal':
       out.bsonType = 'decimal';
@@ -81,6 +105,7 @@ const convertField = (field: SchemaType): MongoJsonSchema => {
       return out;
     case 'geoPoint':
       return {
+        ...(field.description ? { description: field.description } : {}),
         bsonType: 'object',
         required: ['type', 'coordinates'],
         properties: {
@@ -116,7 +141,14 @@ const convertField = (field: SchemaType): MongoJsonSchema => {
         else if (typeof v === 'string') types.add('string');
         else if (typeof v === 'number') {
           const allInt = field.values.every((x) => typeof x !== 'number' || Number.isInteger(x));
-          types.add(allInt ? 'int' : 'number');
+          // Out-of-int32-range members serialize as double — 'int' alone would
+          // reject them, so fall back to the full numeric union.
+          const fitsInt32 =
+            allInt &&
+            field.values.every(
+              (x) => typeof x !== 'number' || (x >= -2147483648 && x <= 2147483647),
+            );
+          types.add(allInt && fitsInt32 ? 'int' : 'number');
           break; // 'int'/'number' already covers every numeric member
         }
       }

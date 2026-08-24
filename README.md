@@ -556,6 +556,7 @@ topProducts.invalidate();              // drop all entries
 topProducts.invalidate(3);             // drop just the { limit: 3 } entry
 hot.invalidateParams('topProducts', 3); // same, via dynamic name lookup
 hot.invalidateCollection('products');  // drop every query watching that collection
+hot.invalidateIds('products', [id]);   // drop only entries depending on that document
 await hot.stop();                      // close streams + ticker
 ```
 
@@ -564,6 +565,47 @@ await hot.stop();                      // close streams + ticker
 parameters. Loader errors are never cached (they retry on the next read), and
 concurrent identical reads are in-flight-deduped. `has(name)` checks whether a
 query is registered.
+
+### Fine-tuned purges: watch ids (or groups of ids)
+
+By default a write anywhere in a collection purges **every** query bound to it.
+That's the safe contract — and often what you want for wide results like
+aggregations. When a query's entries map cleanly onto specific documents,
+declare `idsOf` on the watch ref and invalidation becomes surgical:
+
+```ts
+const userFeed = hot.register('userFeed', {
+  loader: async (userId: string) => db.findMany('orders', { customerId: userId }),
+  watch: [
+    // Only the entries whose feed includes THIS order are purged; other
+    // users' feeds stay warm. Works across processes via change streams.
+    { db: db.client, collection: 'orders', idsOf: (userId: string) => feedOrderIds(userId) },
+  ],
+});
+// …or drive it yourself (works in standalone mode too):
+hot.invalidateIds('orders', [changedOrderId]);
+```
+
+- `idsOf` receives the query's loader arguments and returns **every document id
+  the result depends on** — one per doc, or many for grouped/aggregated rows.
+  Ids may be strings, numbers or ObjectIds; an ObjectId and its hex string
+  match. It must be pure and cheap (runs once per load).
+- **Omit `idsOf` to keep burst semantics** — the right choice for whole-collection
+  aggregations (`countDocuments`, `$group`, …): any change to the collection
+  purges the query's entire LRU.
+- A ref without an extractor next to one with (multi-collection watchers)
+  forces a full purge whenever *its* collection changes; the extracted
+  collection stays surgical.
+- If `idsOf` throws or returns a non-array, affected entries are treated
+  conservatively: they are dropped by any targeted change instead of kept.
+- Watch `stats().perQuery[name].idDrops` to see how many entries targeted
+  purges are saving you (each drop is a read that stayed warm elsewhere).
+
+In replica mode the change stream feeds `invalidateIds` automatically from each
+event's `documentKey._id`; in standalone mode call it from your ORM's
+after-write hooks or wherever you learn about a change. Note that extraction
+sees only the loader arguments — a by-sku lookup whose dependency `_id` isn't
+derivable from `{ sku }` should either key entries by `_id` or stay coarse.
 
 Set `autoRefresh: false` to **turn off the global auto-refetch** entirely — the
 standalone ticker never runs, so data only updates via manual invalidation or
@@ -578,8 +620,9 @@ const hot = createHotCache({ probe, autoRefresh: false, defaultTtlMs: 5_000 });
 Pin the mode to skip the probe entirely when you already know the deployment
 (`mode: 'replica'` / `mode: 'standalone'`), and use `hot.stats()` for
 observability — it reports per-query `hits` / `misses` / `refreshes` /
-`loadErrors` / `sizeSkips` plus current sizes. Cap runaway single entries with a
-per-query `maxValueBytes` (larger values are still returned, just not cached).
+`loadErrors` / `sizeSkips` / `idDrops` plus current sizes. Cap runaway single
+entries with a per-query `maxValueBytes` (larger values are still returned,
+just not cached).
 
 Cached results are shared **by reference** (zero clone overhead); if a caller might
 mutate a result, enable per-query `clone: true` (or `cache: { clone: true }`) so

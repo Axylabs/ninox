@@ -22,19 +22,32 @@ export interface JournalManager {
   findMany(collection: string, filter?: Document): Promise<Document[]>;
   deleteOne(collection: string, filter: Document): Promise<unknown>;
   deleteMany(collection: string, filter: Document): Promise<unknown>;
-  updateOne(collection: string, filter: Document, update: Document): Promise<unknown>;
+  updateOne(
+    collection: string,
+    filter: Document,
+    update: Document,
+  ): Promise<{ matchedCount?: number } | unknown>;
   findOneAndUpdate(
     collection: string,
     filter: Document,
     update: Document,
     options?: Record<string, unknown>,
   ): Promise<Document | null>;
+  /** Optional — used to enforce journal-row uniqueness across runners. */
+  createIndex?(
+    collection: string,
+    key: Document,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
 }
 
 export interface MongoMigrationRunner {
   /** Apply every not-yet-applied migration in numeric order. */
   up(): Promise<void>;
-  /** Roll back applied migrations in reverse order (down to `targetName` when given). */
+  /**
+   * Roll back applied migrations in reverse order (down to `targetName` when
+   * given). An unknown `targetName` throws BEFORE anything is rolled back.
+   */
   down(targetName?: string): Promise<void>;
   status(): Promise<{ applied: string[]; pending: string[] }>;
   /** Scaffold a new `NNN_name.ts` migration file; returns its path. */
@@ -44,6 +57,18 @@ export interface MongoMigrationRunner {
 export interface MongoMigrationRunnerOptions {
   migrationDir?: string;
   logger?: LoggerLike;
+  /**
+   * Which connected database the journal + migrations target (key of the
+   * service's db map). Defaults to the FIRST connected key — set this explicitly
+   * in multi-database services to avoid silently migrating the wrong one.
+   */
+  db?: string;
+  /**
+   * Migration claim lease in ms (default 120_000). A `running` claim older than
+   * the lease is considered orphaned (hard crash) and may be stolen by another
+   * runner; live claims are renewed automatically during long `up()`s.
+   */
+  leaseMs?: number;
 }
 
 /** Matches `NNN_name.ts|js|mjs` — the numeric prefix drives ordering. */
