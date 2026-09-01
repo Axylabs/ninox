@@ -119,7 +119,10 @@ export const makeWriteOps = <
           ...(r.driverOpts as InsertOneOptions),
           ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
-        return await coll(collection).insertOne(doc as OptionalUnlessRequiredId<DocOf2<X>>, insertOpts);
+        return await coll(collection).insertOne(
+          doc as OptionalUnlessRequiredId<DocOf2<X>>,
+          insertOpts,
+        );
       },
       options,
     );

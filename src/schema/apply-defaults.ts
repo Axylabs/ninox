@@ -34,16 +34,18 @@ const cloneDefault = (value: unknown): unknown => {
  * @param schema - The collection's declared schema (`ObjectField`), if any.
  * @param doc - Document being created or fully replaced.
  */
-export const applySchemaDefaults = (
-  schema: ObjectField | undefined,
-  doc: Document,
-): void => {
+export const applySchemaDefaults = (schema: ObjectField | undefined, doc: Document): void => {
   if (!schema || doc === null || typeof doc !== 'object' || Array.isArray(doc)) return;
 
   for (const [key, prop] of Object.entries(schema.properties)) {
     if (key in doc && doc[key] !== undefined) {
       // Present value: recurse so nested defaults materialize around it.
-      if (prop.kind === 'object' && doc[key] !== null && typeof doc[key] === 'object' && !Array.isArray(doc[key])) {
+      if (
+        prop.kind === 'object' &&
+        doc[key] !== null &&
+        typeof doc[key] === 'object' &&
+        !Array.isArray(doc[key])
+      ) {
         applySchemaDefaults(prop, doc[key] as Document);
       }
       continue;

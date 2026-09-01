@@ -14,8 +14,8 @@ import type { QueryCache } from '../../cache/query-cache.ts';
 import { cacheCollectionKey } from '../../cache/query-cache.ts';
 import type { HooksRegistry } from '../../hooks/hooks.ts';
 import { withRetry } from '../../mongo-helpers.ts';
-import type { ObjectField } from '../../schema/types.ts';
 import { applySchemaDefaults } from '../../schema/apply-defaults.ts';
+import type { ObjectField } from '../../schema/types.ts';
 import type { DriftMode } from '../../schema/validate-doc/index.ts';
 import type { FilterInput } from '../../shared/filter-types.ts';
 import type {

@@ -66,7 +66,10 @@ export const makeReadOps = <
           ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
           ...(r.sdk.hint !== undefined ? { hint: r.sdk.hint } : {}),
         };
-        return await coll(collection).findOne(toDriverFilter(f), opts) as unknown as DocOf2<X> | null;
+        return (await coll(collection).findOne(
+          toDriverFilter(f),
+          opts,
+        )) as unknown as DocOf2<X> | null;
       },
       'one',
     );
