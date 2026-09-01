@@ -15,6 +15,7 @@ import { cacheCollectionKey } from '../../cache/query-cache.ts';
 import type { HooksRegistry } from '../../hooks/hooks.ts';
 import { withRetry } from '../../mongo-helpers.ts';
 import type { ObjectField } from '../../schema/types.ts';
+import { applySchemaDefaults } from '../../schema/apply-defaults.ts';
 import type { DriftMode } from '../../schema/validate-doc/index.ts';
 import type { FilterInput } from '../../shared/filter-types.ts';
 import type {
@@ -204,11 +205,13 @@ export const createCrudContext = <
     opts.timestamps?.[String(collection)];
 
   /**
-   * Normalize + stamp a doc being created (in place): `undefined` keys are
-   * stripped (TS "absent" must not serialize to `null` under a strict
-   * validator) and `createdAt`/`updatedAt` are set when unset.
+   * Normalize + stamp a doc being created (in place): schema defaults are
+   * materialized first (absent defaulted fields get their declared value),
+   * `undefined` keys are stripped (TS "absent" must not serialize to `null`
+   * under a strict validator) and `createdAt`/`updatedAt` are set when unset.
    */
   const stampCreate = (collection: ColNames<TClients, TDb>, doc: Document): void => {
+    applySchemaDefaults(opts.getSchema?.(String(collection)), doc);
     stripUndefinedKeys(doc);
     const ts = timestampsFor(collection);
     if (!ts) return;
@@ -236,6 +239,7 @@ export const createCrudContext = <
 
   /** Return a full replacement with `updatedAt` stamped (findOneAndReplace/replaceOne). */
   const stampReplace = (collection: ColNames<TClients, TDb>, doc: Document): Document => {
+    applySchemaDefaults(opts.getSchema?.(String(collection)), doc);
     stripUndefinedKeys(doc);
     const ts = timestampsFor(collection);
     if (!ts?.updatedAt) return doc;
@@ -363,9 +367,13 @@ export const createCrudContext = <
       // join the pre-invalidation in-flight promise (mirrors HotCache's gen).
       const colKey = cacheCollectionKey(client.databaseName, physical);
       const gen = opts.cache !== undefined ? opts.cache.versionOf(colKey) : '';
-      return opts.inFlight!.run(`${colKey}|${gen}|${getPayloadHash()}`, runOnce);
+      // `await` (not a bare `return`): a non-awaited return from this async
+      // function unwinds the caller chain in Bun's stack capture, so the ignex
+      // debugbar's span origin would truncate here and never reach the route
+      // handler that issued this read.
+      return await opts.inFlight!.run(`${colKey}|${gen}|${getPayloadHash()}`, runOnce);
     }
-    return runOnce();
+    return await runOnce();
   };
 
   /** Translate `select` (field list) into a driver `projection`; strip `select`. */

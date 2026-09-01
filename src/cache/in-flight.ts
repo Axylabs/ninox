@@ -13,14 +13,32 @@ export class InFlight {
   run<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const existing = this.pending.get(key);
     if (existing) return existing as Promise<T>;
-    // Promise.resolve().then(fn) so a synchronous throw from `fn` still
-    // becomes a rejected Promise (and reaches joiners) instead of escaping
-    // `run()` as a sync exception and skipping the map registration.
-    const promise = Promise.resolve()
-      .then(fn)
-      .finally(() => {
+    let promise: Promise<T>;
+    try {
+      // Call fn() SYNCHRONOUSLY (instead of Promise.resolve().then(fn)) so
+      // the caller chain — route handler → ORM → hot-cache get/fetch — stays
+      // on the stack for the ignex debugbar's span-origin capture. A detached
+      // .then() microtask unwinds that chain, so origins truncate at this
+      // wrapper and never reach the application code that issued the query.
+      // Promise.resolve() still normalizes sync returns; the try/catch keeps
+      // the old contract of turning a synchronous throw into a rejection.
+      promise = Promise.resolve(fn());
+    } catch (err) {
+      promise = Promise.reject(err) as Promise<T>;
+    }
+    // Cleanup as a DETACHED side-chain: wrapping the returned promise in
+    // .finally() would make Bun truncate the async chain at this wrapper and
+    // hide the route handler from span origins again. Both handlers consume
+    // the settlement so a rejected loader never surfaces as an unhandled
+    // rejection.
+    promise.then(
+      () => {
         this.pending.delete(key);
-      });
+      },
+      () => {
+        this.pending.delete(key);
+      },
+    );
     this.pending.set(key, promise);
     return promise;
   }

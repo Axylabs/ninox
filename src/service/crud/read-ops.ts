@@ -66,7 +66,7 @@ export const makeReadOps = <
           ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
           ...(r.sdk.hint !== undefined ? { hint: r.sdk.hint } : {}),
         };
-        return coll(collection).findOne(toDriverFilter(f), opts) as unknown as DocOf2<X> | null;
+        return await coll(collection).findOne(toDriverFilter(f), opts) as unknown as DocOf2<X> | null;
       },
       'one',
     );
@@ -207,7 +207,7 @@ export const makeReadOps = <
           ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
           ...(r.sdk.hint !== undefined ? { hint: r.sdk.hint } : {}),
         };
-        return coll(collection).countDocuments(toDriverFilter(filter ?? {}), opts);
+        return await coll(collection).countDocuments(toDriverFilter(filter ?? {}), opts);
       },
       'none',
     );
@@ -260,7 +260,7 @@ export const makeReadOps = <
           ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
           ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
         };
-        return coll(collection).estimatedDocumentCount(opts);
+        return await coll(collection).estimatedDocumentCount(opts);
       },
       'none',
     );

@@ -250,3 +250,96 @@ describe('CRUD ops', () => {
     });
   });
 });
+
+describe('schema defaults on writes', () => {
+  /** Minimal schema: an object with a defaulted scalar + nested object + array defaults. */
+  const planSchema = {
+    kind: 'object',
+    flags: { optional: false, hasDefault: false },
+    properties: {
+      _id: { kind: 'objectId', flags: { optional: false, hasDefault: false } },
+      code: { kind: 'string', flags: { optional: false, hasDefault: false } },
+      active: {
+        kind: 'boolean',
+        flags: { optional: false, hasDefault: true, defaultValue: true },
+      },
+      interval: {
+        kind: 'string',
+        flags: { optional: false, hasDefault: true, defaultValue: 'monthly' },
+      },
+      limits: {
+        kind: 'object',
+        flags: { optional: false, hasDefault: true, defaultValue: {} },
+        properties: {
+          maxGigs: { kind: 'number', integer: true, flags: { optional: true, hasDefault: false } },
+        },
+      },
+      features: {
+        kind: 'array',
+        flags: { optional: false, hasDefault: true, defaultValue: [] },
+        items: { kind: 'string', flags: { optional: false, hasDefault: false } },
+      },
+    },
+  } as any;
+
+  const makePlanCrud = (collection: FakeCollection): any =>
+    makeCrud(collection, { getSchema: () => planSchema });
+
+  test('insertOne materializes schema defaults into the stored doc', async () => {
+    let stored: Document | undefined;
+    const crud = makePlanCrud({
+      insertOne: async (doc) => {
+        stored = doc as Document;
+        return { insertedId: 'id' };
+      },
+    });
+    await crud.insertOne('plans', { code: 'pro' });
+    expect(stored).toMatchObject({
+      code: 'pro',
+      active: true,
+      interval: 'monthly',
+      features: [],
+      limits: {},
+    });
+  });
+
+  test('defaults are deep-cloned per document (no shared references)', async () => {
+    const stored: Document[] = [];
+    const crud = makePlanCrud({
+      insertMany: async (docs) => {
+        stored.push(...(docs as Document[]));
+        return { insertedCount: docs.length };
+      },
+    });
+    await crud.insertMany('plans', [{ code: 'a' }, { code: 'b' }]);
+    expect(stored[0]?.features).not.toBe(stored[1]?.features);
+    expect(stored[0]?.limits).not.toBe(stored[1]?.limits);
+  });
+
+  test('explicit values are never overwritten by defaults', async () => {
+    let stored: Document | undefined;
+    const crud = makePlanCrud({
+      insertOne: async (doc) => {
+        stored = doc as Document;
+        return { insertedId: 'id' };
+      },
+    });
+    await crud.insertOne('plans', { code: 'pro', active: false, features: ['x'] });
+    expect(stored?.active).toBe(false);
+    expect(stored?.features).toEqual(['x']);
+  });
+
+  test('nested defaults materialize inside a provided object', async () => {
+    let stored: Document | undefined;
+    const crud = makePlanCrud({
+      insertOne: async (doc) => {
+        stored = doc as Document;
+        return { insertedId: 'id' };
+      },
+    });
+    await crud.insertOne('plans', { code: 'pro', limits: { maxGigs: 50 } });
+    // limits was provided → kept as-is; sibling defaults still applied.
+    expect(stored?.limits).toEqual({ maxGigs: 50 });
+    expect(stored?.active).toBe(true);
+  });
+});

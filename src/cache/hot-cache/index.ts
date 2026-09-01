@@ -188,13 +188,14 @@ export class HotCache {
     if (this._mode === 'replica' && !this.stopped) {
       this.watcher.start();
     }
-    return {
-      get: (...args: TArgs) => this.get(name, ...args) as Promise<TResult>,
-      invalidate: (...args: TArgs) => {
-        if (args.length === 0) this.invalidate(name);
-        else this.invalidateParams(name, ...args);
-      },
+    // Named consts (not inline arrows) so stack frames read `get`/`invalidate`
+    // instead of `<anonymous>` when user code goes through the accessor.
+    const get = (...args: TArgs): Promise<TResult> => this.get(name, ...args) as Promise<TResult>;
+    const invalidate = (...args: TArgs): void => {
+      if (args.length === 0) this.invalidate(name);
+      else this.invalidateParams(name, ...args);
     };
+    return { get, invalidate };
   }
 
   /**
@@ -219,7 +220,11 @@ export class HotCache {
       q.lru.delete(key);
     }
     q.misses++;
-    return this.fetch(q, key, args, q.gen);
+    // `await` (not a bare `return`): a non-awaited return from an async
+    // function unwinds the caller chain in Bun's stack capture, so the ignex
+    // debugbar's span origin would truncate here and never reach the route
+    // handler that issued this read.
+    return await this.fetch(q, key, args, q.gen);
   }
 
   /** Drop every cached entry for a registered query. */
@@ -350,12 +355,7 @@ export class HotCache {
     if (this.disposed) return this._mode;
     if (this.started) return this._mode;
     if (!this.startPromise) {
-      this.startPromise = this.runStart().catch((err) => {
-        this.startPromise = undefined;
-        this.startAttempted = false;
-        this.started = false;
-        throw err;
-      });
+      this.startPromise = this.runStart().catch(this.forgetFailedStart);
     }
     return this.startPromise;
   }
@@ -380,6 +380,18 @@ export class HotCache {
   }
 
   /* ----------------------------- internals ----------------------------- */
+
+  /**
+   * A FAILED start does not stick: clear the memoized state so the next
+   * `get()`/`start()` retries probing (one transient blip during startup must
+   * not disable background freshness for the life of the instance).
+   */
+  private forgetFailedStart = (err: unknown): never => {
+    this.startPromise = undefined;
+    this.startAttempted = false;
+    this.started = false;
+    throw err;
+  };
 
   private async runStart(): Promise<HotCacheMode> {
     this.stopped = false;
@@ -411,12 +423,20 @@ export class HotCache {
   private ensureStarted(): void {
     if (this.disposed || this.started || this.startAttempted) return;
     this.startAttempted = true;
-    void this.start().catch((err) => {
+    // Fire-and-forget: the rejection crosses a promise boundary, so the error's
+    // own stack will NOT contain whoever triggered this read. Snapshot the
+    // synchronous caller chain NOW and attach it as `cause` + log meta —
+    // otherwise "start failed" warnings are unattributable.
+    const origin = new Error('hot cache: background start() was triggered by this call');
+    const reportStartFailure = (err: unknown): void => {
+      const wrapped = err instanceof Error ? err : new Error(String(err));
+      if (wrapped.cause === undefined) wrapped.cause = origin;
       this.logger.warn?.(
-        { error: err instanceof Error ? err.message : String(err) },
+        { error: wrapped.message, stack: wrapped.stack, trigger: origin.stack },
         'hot cache start failed; reads continue without auto-refresh',
       );
-    });
+    };
+    this.start().catch(reportStartFailure);
   }
 
   private defaultProbe = async (): Promise<boolean> => {
@@ -461,7 +481,9 @@ export class HotCache {
     // invalidation must start a FRESH load, never join the pre-invalidation
     // in-flight one (whose result is stale-by-arrival for it).
     const dedupeKey = `${q.name}${WATCH_SEP}g${gen}${WATCH_SEP}${key}`;
-    return this.inflight.run<unknown>(dedupeKey, async () => {
+    // Named const (not an inline async arrow) so loader frames read `loadOnce`
+    // instead of `<anonymous>` in error stacks.
+    const loadOnce = async (): Promise<unknown> => {
       try {
         const value = await q.config.loader(...args);
         // Generation guard: if an invalidation/clear happened while the loader
@@ -487,7 +509,8 @@ export class HotCache {
         q.loadErrors++;
         throw err;
       }
-    });
+    };
+    return this.inflight.run<unknown>(dedupeKey, loadOnce);
   }
 
   private setEntry(

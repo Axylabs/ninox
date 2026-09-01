@@ -119,7 +119,7 @@ export const makeWriteOps = <
           ...(r.driverOpts as InsertOneOptions),
           ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
-        return coll(collection).insertOne(doc as OptionalUnlessRequiredId<DocOf2<X>>, insertOpts);
+        return await coll(collection).insertOne(doc as OptionalUnlessRequiredId<DocOf2<X>>, insertOpts);
       },
       options,
     );
@@ -382,7 +382,7 @@ export const makeWriteOps = <
           ...(r.driverOpts as DeleteOptions),
           ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
-        return coll(collection).deleteOne(toDriverFilter(filter), delOpts);
+        return await coll(collection).deleteOne(toDriverFilter(filter), delOpts);
       },
       options,
     );
@@ -412,7 +412,7 @@ export const makeWriteOps = <
           ...(r.driverOpts as DeleteOptions),
           ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
-        return coll(collection).deleteMany(toDriverFilter(filter), delOpts);
+        return await coll(collection).deleteMany(toDriverFilter(filter), delOpts);
       },
       options,
     );
@@ -525,7 +525,7 @@ export const makeWriteOps = <
           ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
           upsert: true,
         };
-        return coll(collection).updateOne(toDriverFilter(filter), formatted, updateOpts);
+        return await coll(collection).updateOne(toDriverFilter(filter), formatted, updateOpts);
       },
       options,
     );
@@ -568,7 +568,7 @@ export const makeWriteOps = <
           ...(r.driverOpts as BulkWriteOptions),
           ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
-        return coll(collection).bulkWrite(writes, bulkOpts);
+        return await coll(collection).bulkWrite(writes, bulkOpts);
       },
       options,
     );
@@ -595,7 +595,7 @@ export const makeWriteOps = <
           ...(r.driverOpts as BulkWriteOptions),
           ...(r.sdk.session !== undefined ? { session: r.sdk.session } : {}),
         };
-        return coll(collection).bulkWrite(operations, bulkOpts);
+        return await coll(collection).bulkWrite(operations, bulkOpts);
       },
       options,
     );

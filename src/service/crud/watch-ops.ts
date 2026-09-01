@@ -65,7 +65,7 @@ export const makeWatchOps = <
               ...(r.sdk.maxTimeMS !== undefined ? { maxTimeMS: r.sdk.maxTimeMS } : {}),
               ...(r.sdk.hint !== undefined ? { hint: r.sdk.hint } : {}),
             };
-            return execute(opts);
+            return await execute(opts);
           },
           opName === 'mongo.getOne' ? 'one' : opName === 'mongo.findMany' ? 'many' : 'none',
         ),

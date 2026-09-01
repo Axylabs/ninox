@@ -8,6 +8,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Schema defaults are now materialized on writes** — a field declared with
+  `.default(v)` was only *validated* (allowed to be absent) but never written,
+  so stored documents silently lacked defaulted fields: `active:
+  s.boolean().default(true)` inserts stored no `active`, and any read path
+  that checked it (e.g. a `plan && plan.active` guard) misread every row.
+  `insertOne`/`insertMany`/`findOneAndReplace`/`replaceOne` now fill absent
+  defaulted fields (recursively into nested objects) with a per-document deep
+  clone before the driver write; explicitly-provided values are never
+  overwritten. Regression suite: `tests/crud.test.ts` → "schema defaults on
+  writes".
 - **CRUD cache-key identity** — the cache key now includes the op name (and
   `distinct`'s field), so `getOne` / `countDocuments` / `distinct` on the same
   filter can never be served each other's cached results. The key hash is a

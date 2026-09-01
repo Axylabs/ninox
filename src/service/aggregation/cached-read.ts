@@ -123,8 +123,8 @@ export const createCachedAggregate = <C extends string>(ctx: CachedAggregateCtx<
       const primaryKey = cacheCollectionKey(client.databaseName, physical);
       const gen = cache !== undefined ? cache.versionOf(primaryKey) : '';
       const dedupeKey = `${primaryKey}|${gen}|${opName}|${stableHash([pipeline, options])}`;
-      return opts.inFlight!.run(dedupeKey, runOnce);
+      return await opts.inFlight!.run(dedupeKey, runOnce);
     }
-    return runOnce();
+    return await runOnce();
   };
 };
