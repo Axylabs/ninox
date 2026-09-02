@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { defineCrudOp, type CrudOpDeps } from '../src/service/crud-op.ts';
-import { traceDbOp, type TraceDbOpOptions } from '../src/service/trace-db-op.ts';
+import { type CrudOpDeps, defineCrudOp } from '../src/service/crud-op.ts';
 import type { DbOpMeta } from '../src/service/trace-db-op.ts';
+import { type TraceDbOpOptions, traceDbOp } from '../src/service/trace-db-op.ts';
 import type { LoggerLike } from '../src/utils/logger.ts';
 
 const noopLogger: LoggerLike = { debug() {}, info() {}, warn() {}, error() {} };
@@ -89,7 +89,11 @@ describe('debugbar "what was sent" params capture', () => {
     const sent = {
       filter: {
         re: /abc/g,
-        id: { toJSON() { return 'o1' } },
+        id: {
+          toJSON() {
+            return 'o1';
+          },
+        },
         at: new Date('2026-09-01T00:00:00.000Z'),
       },
     };
