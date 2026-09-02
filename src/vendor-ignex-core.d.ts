@@ -15,7 +15,7 @@ declare module '@ignex/core/debug' {
    */
   export function debugQuery<T = unknown>(
     sql: string,
-    params: unknown[] | undefined,
+    params: unknown,
     fn: () => T | Promise<T>,
   ): Promise<T>;
 }

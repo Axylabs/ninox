@@ -8,7 +8,7 @@ import type { DbOpMeta } from './trace-db-op.ts';
 
 export interface CrudOpDeps<TCollection> {
   trace: <T>(meta: DbOpMeta, fn: () => T | Promise<T>) => Promise<T>;
-  meta: (collection: TCollection, op: string) => DbOpMeta;
+  meta: (collection: TCollection, op: string, params?: unknown) => DbOpMeta;
 }
 
 /**
@@ -25,12 +25,14 @@ export const defineCrudOp = async <TCollection, TResult>(
   execute: (resolved: ResolvedQueryOptions) => TResult | Promise<TResult>,
   options?: QueryOptions,
   write = false,
+  /** What was sent to the DB (filter/doc/pipeline) — recorded in the debugbar. */
+  params?: unknown,
 ): Promise<TResult> => {
   const resolved = resolveQueryOptions(options);
   // Writes are at-least-once: retry them only when the caller opts in via
   // `retryWrites: true`. Reads are idempotent and always retried.
   const maxAttempts = write && resolved.retryWrites !== true ? 1 : resolved.maxAttempts;
-  return deps.trace(deps.meta(collection, opName), async () =>
+  return deps.trace(deps.meta(collection, opName, params), async () =>
     withRetry(async () => execute(resolved), {
       maxAttempts,
       delayMs: resolved.retryDelayMs,

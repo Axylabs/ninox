@@ -1,5 +1,4 @@
 import type { CreateCollectionOptions, Db, Document } from 'mongodb';
-import { DomainError } from '../errors/index.ts';
 import { type ObjectField, toMongoValidator } from '../schema/index.ts';
 import type { IndexSpec } from '../types.ts';
 import type { LoggerLike } from '../utils/logger.ts';
@@ -49,50 +48,122 @@ export interface SchemaOpsOptions {
 }
 
 /**
- * Schema-first collection management. `createSchema` provisions a collection
- * with a `$jsonSchema` validator derived from the ORM schema (and creates any
- * declared indexes); `updateSchema` hot-swaps the validator via `collMod`.
+ * Schema-first collection management.
+ *
+ * `createSchema` is IDEMPOTENT and SELF-RECONCILING: on a NEW collection it
+ * provisions the `$jsonSchema` validator derived from the ORM schema plus the
+ * declared indexes; when the collection ALREADY exists it upgrades the DB
+ * schema to match the current ORM schema — hot-swapping the validator via
+ * `collMod` only when it has actually drifted, and creating any newly-declared
+ * indexes. It never drops indexes or data (destructive reconciliation stays
+ * explicit via `syncIndexes`), so it is safe to call on every boot: the Mongo
+ * schema follows the app schema automatically as models change.
+ *
+ * `updateSchema` hot-swaps a validator explicitly (via `collMod`);
+ * `syncIndexes` reconciles index drift (create missing, drop undeclared).
  */
 export const makeSchemaOps = (client: Db, _logger: LoggerLike, opts: SchemaOpsOptions) => {
-  /** Provision a collection with its `$jsonSchema` validator + declared indexes. */
+  /** Read the `$jsonSchema` validator currently installed on a physical collection. */
+  const readCollectionValidator = async (physical: string): Promise<Document | undefined> => {
+    const info = (await client.listCollections({ name: physical }).next()) as
+      | { options?: { validator?: Document } }
+      | undefined;
+    return info?.options?.validator;
+  };
+
+  /**
+   * Create any declared index that is missing from the live collection.
+   * ADDITIVE ONLY — never drops an existing (possibly undeclared) index; that
+   * stays the explicit job of `syncIndexes`.
+   */
+  const ensureDeclaredIndexes = async (
+    collection: string,
+    physical: string,
+    def?: CollectionRegistryEntry,
+  ): Promise<void> => {
+    const declared = def?.indexes ?? [];
+    if (declared.length === 0) return;
+    const handle = client.collection(physical);
+    const existing = new Set(
+      (await handle.listIndexes().toArray())
+        .filter((i) => i.name !== '_id_')
+        .map((i) => indexKeyOf(i.key as Document, i as IndexOptionLike)),
+    );
+    for (const index of declared) {
+      if (existing.has(indexKeyOf(index.key as Document, index.options))) continue;
+      try {
+        await handle.createIndex(index.key as Document, index.options);
+      } catch (err) {
+        if ((err as { code?: number })?.code === 85 /* IndexOptionsConflict */) {
+          // An index with the same name/key exists but with different options
+          // (e.g. `unique` added). Can't be applied additively — tell the user
+          // how to reconcile instead of failing the whole boot.
+          throw new Error(
+            `Cannot apply declared index on "${collection}": an index with the same ` +
+              `name/key already exists with different options. Run ` +
+              `db.syncIndexes("${collection}") to reconcile index drift.`,
+            { cause: err },
+          );
+        }
+        throw err;
+      }
+    }
+  };
+
+  /**
+   * Provision a collection with its `$jsonSchema` validator + declared indexes,
+   * or — when the collection already exists — reconcile it to the current
+   * schema (validator hot-swap + missing declared indexes). Idempotent: safe to
+   * call on every boot.
+   */
   const createSchema = async (
     collection: string,
     createCollectionOptions?: CreateCollectionOptions,
   ): Promise<void> => {
     const physical = opts.resolveCollectionName(collection);
     const def = opts.getDefinition(collection);
-    const validator = def?.schema ? toMongoValidator(def.schema) : undefined;
+    // Caller options FIRST, derived validator LAST — a stale `validator`
+    // key in the options must not clobber the schema-derived one.
+    const createOptions = {
+      ...(createCollectionOptions ?? {}),
+      ...(def?.schema ? { validator: toMongoValidator(def.schema) } : {}),
+    } as CreateCollectionOptions;
+
+    // Try the fast path first: create the collection (implicitly creating its
+    // database). We intentionally skip a pre-flight `listCollections` — on a
+    // not-yet-created database that errors with `NamespaceNotFound` (code 26).
+    // Code 48 means a previous boot already provisioned the collection, in
+    // which case we fall through to the reconcile path below.
+    let created = true;
     try {
-      await client.createCollection(physical, {
-        // Caller options FIRST, derived validator LAST — a stale `validator`
-        // key in the options must not clobber the schema-derived one.
-        ...(createCollectionOptions ?? {}),
-        ...(validator ? { validator } : {}),
-      });
+      await client.createCollection(physical, createOptions);
     } catch (err) {
-      if ((err as { code?: number })?.code === 48) {
-        throw new DomainError('COLLECTION_EXISTS', `Collection "${collection}" already exists`, {
-          physicalCollection: physical,
-        });
-      }
-      throw err;
+      if ((err as { code?: number })?.code !== 48) throw err;
+      created = false;
     }
-    const indexes = def?.indexes ?? [];
-    if (indexes.length > 0) {
+
+    if (created) {
       try {
-        await client.collection(physical).createIndexes(
-          indexes.map((index) => ({
-            key: index.key as Document,
-            ...(index.options ?? {}),
-          })),
-        );
+        await ensureDeclaredIndexes(collection, physical, def);
       } catch (err) {
         // Roll back so a half-provisioned collection (validator, no indexes)
         // isn't left behind on partial failure.
         await client.dropCollection(physical).catch(() => {});
         throw err;
       }
+      return;
     }
+
+    // Collection already exists → self-heal to the current app schema: swap the
+    // validator only when it actually drifted, and create any missing declared
+    // indexes (never dropping anything — that is `syncIndexes`'s job).
+    if (createOptions.validator) {
+      const current = await readCollectionValidator(physical);
+      if (JSON.stringify(current) !== JSON.stringify(createOptions.validator)) {
+        await client.command({ collMod: physical, validator: createOptions.validator });
+      }
+    }
+    await ensureDeclaredIndexes(collection, physical, def);
   };
 
   /** Hot-swap a collection's validator via `collMod` (no downtime). */

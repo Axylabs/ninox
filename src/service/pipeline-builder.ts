@@ -216,6 +216,8 @@ export class PipelineBuilder<
       'mongo.pipeline',
       run,
       this.deps.options,
+      false,
+      { pipeline: this.stages },
     );
   }
 
@@ -248,6 +250,8 @@ export class PipelineBuilder<
       'mongo.pipeline.first',
       run,
       this.deps.options,
+      false,
+      { pipeline: this.stages },
     );
   }
 

@@ -6,8 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Debugbar now shows WHAT WAS SENT for every DB op** — `traceDbOp` previously called the ignex `debugQuery` hook with `undefined` params, so the debugbar recorded a bare `<collection>.<op>` label with no query payload. Ops now carry structured `params` (reads: `filter` + driver `options` + `distinct` field; writes: `doc` / `filter`+`update` / `replacement`; aggregations `paginateFlexible`/`pipeline`/`aggregate`: the full pipeline; cursor pagination: `filter`+`sort`+`limit`), sanitized to JSON-safe values before reaching the dashboard. `TraceDbOpOptions.debugQuery` is now an injectable seam (testable without the `@ignex/core` probe). Regression suite: `tests/trace-params.test.ts`.
+
 ### Fixed
 
+- **`createSchema` is now idempotent + self-reconciling (boot-safe)** — on a
+  NEW collection it provisions the `$jsonSchema` validator + declared indexes
+  as before; when the collection ALREADY exists it no longer throws
+  `COLLECTION_EXISTS` — it hot-swaps the validator via `collMod` only when the
+  ORM schema has actually drifted, and creates any newly-declared indexes
+  (additive — it never drops). Calling it on every boot (the generated
+  `db.ts` provisioning pattern) now keeps the Mongo schema in lockstep with the
+  app schema as models change; undeclared indexes are still only removed by an
+  explicit `syncIndexes`. Regression suite:
+  `tests/schema-create-reconcile.test.ts`.
 - **Schema defaults are now materialized on writes** — a field declared with
   `.default(v)` was only *validated* (allowed to be absent) but never written,
   so stored documents silently lacked defaulted fields: `active:

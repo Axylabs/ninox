@@ -38,6 +38,8 @@ export const makeAggregateOps = <
       'mongo.aggregate',
       (r) => coll(collection).aggregate<TResult>(pipeline, mergeAggOptions(r.driverOpts, r.sdk)),
       options,
+      false,
+      { pipeline },
     );
   };
 

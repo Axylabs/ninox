@@ -7,11 +7,24 @@ export interface DbOpMeta {
   physicalCollection?: string;
   db: string;
   op: string;
+  /**
+   * What was sent to the database (filter / document / update / pipeline /
+   * options). Surfaced in the ignex debugbar as the span's `params`, so the
+   * dashboard shows exactly what the query carried — not just its name.
+   * Optional: ops without a payload worth showing omit it.
+   */
+  params?: unknown;
 }
 
 export interface TraceDbOpOptions {
   /** Map driver errors to typed DomainError/InfraError before rethrowing. */
   wrapMongoErrors?: boolean;
+  /**
+   * Test/advanced seam: inject the ignex-debugbar `debugQuery` implementation
+   * directly. Omitted (production) → probed lazily via `@ignex/core/debug`.
+   * `null` forces the plain pass-through without touching the probe cache.
+   */
+  debugQuery?: DebugQuery | null;
 }
 
 /**
@@ -23,7 +36,7 @@ export interface TraceDbOpOptions {
  */
 type DebugQuery = (
   sql: string,
-  params: unknown[] | undefined,
+  params: unknown,
   fn: () => unknown | Promise<unknown>,
 ) => Promise<unknown>;
 
@@ -41,6 +54,27 @@ const probeDebugQuery = async (): Promise<void> => {
 };
 
 /**
+ * Make a captured param payload JSON-safe before it reaches the debugbar: a
+ * JSON round-trip strips `undefined` keys, RegExps, class instances and other
+ * values that would otherwise crash `JSON.stringify` downstream (the live API
+ * and the SQLite history both serialize span attrs). Mongo filters may carry
+ * such values (`_id` ObjectIds serialize to their hex string; Dates to ISO
+ * strings — exactly what a developer wants to see). Falls back to `String()`
+ * when even the round-trip fails.
+ */
+const sanitizeDebugParams = (value: unknown): unknown => {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    try {
+      return String(value);
+    } catch {
+      return '[unserializable]';
+    }
+  }
+};
+
+/**
  * Wrap a DB operation with start/ok/error structured logging (duration, op,
  * collection, db). When `wrapMongoErrors` is set, driver errors are mapped to
  * the ORM's typed error classes before being rethrown.
@@ -51,6 +85,14 @@ const probeDebugQuery = async (): Promise<void> => {
  * per-request db-time aggregate. The integration is optional and automatic:
  * it activates only when `@ignex/core` is installed AND a request trace is
  * active, and costs a single cached module probe otherwise.
+ *
+ * Caveat: the hook only fires when the dynamic `@ignex/core/debug` probe
+ * resolves to the SAME module instance as the app's debugbar plugin (the
+ * plugin's tracer gates on its own `tracingEnabled`). That is the case for a
+ * normal npm install of both packages — but if this ORM is `bun link`-ed into
+ * an app whose build cannot resolve `@ignex/core/debug` from the linked path,
+ * the bundler externalizes the probe and it silently no-ops (no `db` spans).
+ * Install `@ignex/core` alongside the app (npm-style) to keep the integration.
  */
 export const traceDbOp = async <T>(
   logger: LoggerLike,
@@ -61,11 +103,19 @@ export const traceDbOp = async <T>(
   const start = performance.now();
   logger.debug({ ...meta, operation: 'start' }, 'start');
   try {
-    // First op only: resolve the optional ignex-debugbar hook.
-    if (debugQueryCache === undefined) await probeDebugQuery();
-    const debugQuery = debugQueryCache;
+    // First op only: resolve the optional ignex-debugbar hook. An explicitly
+    // injected `options.debugQuery` (tests / advanced hosts) wins over the
+    // lazily-probed `@ignex/core/debug` helper.
+    let debugQuery = options.debugQuery;
+    if (debugQuery === undefined) {
+      if (debugQueryCache === undefined) await probeDebugQuery();
+      debugQuery = debugQueryCache;
+    }
+    // Pass WHAT WAS SENT (filter/doc/pipeline/…) as the span's params so the
+    // debugbar shows the actual query payload, not just `collection.op`.
+    const params = meta.params === undefined ? undefined : sanitizeDebugParams(meta.params);
     const result = debugQuery
-      ? ((await debugQuery(`${meta.collection}.${meta.op}`, undefined, () => fn())) as T)
+      ? ((await debugQuery(`${meta.collection}.${meta.op}`, params, () => fn())) as T)
       : await fn();
     const durationMs = performance.now() - start;
     logger.info({ ...meta, durationMs }, 'ok');

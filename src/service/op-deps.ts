@@ -13,8 +13,8 @@ import { traceDbOp } from './trace-db-op.ts';
 export interface OpDeps<TC> {
   /** Log a start/ok/error trace around one DB call (optional driver-error mapping). */
   trace: <T>(meta: DbOpMeta, fn: () => T | Promise<T>) => Promise<T>;
-  /** Structured log metadata for a (collection, op). */
-  meta: (collection: TC, op: string) => DbOpMeta;
+  /** Structured log metadata for a (collection, op) + optional sent-payload. */
+  meta: (collection: TC, op: string, params?: unknown) => DbOpMeta;
 }
 
 /** Build the `{ trace, meta }` op-pipeline deps shared by every op factory. */
@@ -26,11 +26,12 @@ export const makeOpDeps = <TC>(
 ): OpDeps<TC> => {
   const trace = <T>(meta: DbOpMeta, fn: () => T | Promise<T>): Promise<T> =>
     traceDbOp(logger, meta, fn, { wrapMongoErrors });
-  const meta = (collection: TC, op: string): DbOpMeta => ({
+  const meta = (collection: TC, op: string, params?: unknown): DbOpMeta => ({
     collection: String(collection),
     physicalCollection: resolve(String(collection)),
     db: dbLabel,
     op,
+    ...(params !== undefined ? { params } : {}),
   });
   return { trace, meta };
 };

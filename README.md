@@ -787,10 +787,15 @@ you need the code → status mapping yourself.
 > transient errors.
 
 Schema validation is enforced **by MongoDB** — the DB `$jsonSchema` validator
-derived from your schema is installed with `createSchema` (and hot-swapped with
-`updateSchema`), and the DB rejects violating writes with `VALIDATION_FAILED`.
-ninox deliberately does **not** validate *incoming user input* at runtime (no
-client-side/zod layer).
+derived from your schema is installed with `createSchema`, and the DB rejects
+violating writes with `VALIDATION_FAILED`. `createSchema` is **idempotent and
+self-reconciling**: it provisions a NEW collection, and when the collection
+already exists it upgrades the DB schema to match the current ORM schema
+(hot-swapping the validator via `collMod` only when it has drifted, and
+creating any newly-declared indexes) — so calling it on every boot keeps
+Mongo's schema in lockstep with your models as they change. `updateSchema`
+hot-swaps a validator explicitly (via `collMod`). ninox deliberately does
+**not** validate *incoming user input* at runtime (no client-side/zod layer).
 
 - **Strict by default** — `additionalProperties: false` is emitted unless a
   field opts out (`s.object({ ... }, { additionalProperties: true })`), so
@@ -814,7 +819,8 @@ client-side/zod layer).
   `DomainError` carries the offending field paths (`extra.fields`), the failing
   document id (`extra.documentId`), and the raw `extra.details`, so a rejected
   write names exactly what (and which document) violated the schema.
-- **Index lifecycle** — `createSchema` installs the declared indexes;
+- **Index lifecycle** — `createSchema` installs the declared indexes (and, on
+  an existing collection, adds any newly-declared ones without dropping);
   `syncIndexes(collection)` reconciles drift (`await db.syncIndexes('products')`
   creates missing declared keys and drops undeclared ones, `_id_` kept).
 
@@ -1015,9 +1021,10 @@ unknown keys in object literals AND non-literal patches. The only way an unknown
 key passes is a variable explicitly typed with an index signature
 (`Record<string, any>`) — prefer inline literals for full checking.
 
-**Index drift.** `createSchema` installs declared indexes; if they drift out of
-band (manual drops, other tooling), `syncIndexes('collection')` reconciles —
-creates missing declared indexes and drops undeclared ones (`_id_` kept).
+**Index drift.** `createSchema` installs declared indexes on creation and adds
+newly-declared ones on re-provision; if indexes drift out of band (manual
+drops, other tooling), `syncIndexes('collection')` reconciles — creates
+missing declared indexes and drops undeclared ones (`_id_` kept).
 
 **Observability.** `QueryCache.stats()` (hits/misses/evictions/…) and
 `hot.stats()` (per-query hits/misses/refreshes/loadErrors/evictions/…) give you

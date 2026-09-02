@@ -125,6 +125,7 @@ export const makeWriteOps = <
         );
       },
       options,
+      { doc },
     );
     invalidate(collection);
     await safeAfterHooks(String(collection), 'afterCreate', {
@@ -165,6 +166,7 @@ export const makeWriteOps = <
         );
       },
       options,
+      { docs },
     );
     invalidate(collection);
     await safeAfterHooks(String(collection), 'afterCreate', {
@@ -201,6 +203,7 @@ export const makeWriteOps = <
         );
       },
       options,
+      { filter, update: effective },
     );
     invalidate(collection);
     await safeAfterHooks(String(collection), 'afterUpdate', {
@@ -237,6 +240,7 @@ export const makeWriteOps = <
         );
       },
       options,
+      { filter, update: effective },
     );
     invalidate(collection);
     await safeAfterHooks(String(collection), 'afterUpdate', {
@@ -279,6 +283,7 @@ export const makeWriteOps = <
         ) as unknown as DocOf2<X> | null;
       },
       options,
+      { filter, update: effective },
     );
     invalidate(collection);
     await safeAfterHooks(String(collection), 'afterUpdate', {
@@ -321,6 +326,7 @@ export const makeWriteOps = <
         ) as unknown as DocOf2<X> | null;
       },
       options,
+      { filter, replacement: effective },
     );
     invalidate(collection);
     await safeAfterHooks(String(collection), 'afterUpdate', {
@@ -358,6 +364,7 @@ export const makeWriteOps = <
         );
       },
       options,
+      { filter, replacement },
     );
     invalidate(collection);
     await safeAfterHooks(String(collection), 'afterUpdate', {
@@ -388,6 +395,7 @@ export const makeWriteOps = <
         return await coll(collection).deleteOne(toDriverFilter(filter), delOpts);
       },
       options,
+      { filter },
     );
     invalidate(collection);
     await safeAfterHooks(String(collection), 'afterDelete', {
@@ -418,6 +426,7 @@ export const makeWriteOps = <
         return await coll(collection).deleteMany(toDriverFilter(filter), delOpts);
       },
       options,
+      { filter },
     );
     invalidate(collection);
     await safeAfterHooks(String(collection), 'afterDelete', {
@@ -455,6 +464,7 @@ export const makeWriteOps = <
         ) as unknown as DocOf2<X> | null;
       },
       options,
+      { filter },
     );
     invalidate(collection);
     await safeAfterHooks(String(collection), 'afterDelete', {
@@ -498,6 +508,7 @@ export const makeWriteOps = <
         );
       },
       options,
+      { filter, update: effective },
     );
     invalidate(collection);
     await safeAfterHooks(String(collection), 'afterDelete', {
@@ -531,6 +542,7 @@ export const makeWriteOps = <
         return await coll(collection).updateOne(toDriverFilter(filter), formatted, updateOpts);
       },
       options,
+      { filter, update: formatted },
     );
     invalidate(collection);
     await safeAfterHooks(String(collection), 'afterUpdate', {
@@ -574,6 +586,7 @@ export const makeWriteOps = <
         return await coll(collection).bulkWrite(writes, bulkOpts);
       },
       options,
+      { operations },
     );
     invalidate(collection);
     return result;
@@ -601,6 +614,7 @@ export const makeWriteOps = <
         return await coll(collection).bulkWrite(operations, bulkOpts);
       },
       options,
+      { operations },
     );
     invalidate(collection);
     return result;

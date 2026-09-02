@@ -72,8 +72,11 @@ export const createCachedAggregate = <C extends string>(ctx: CachedAggregateCtx<
       (resolved.dedupe === true || (opts.dedupeReads === true && noSession)) &&
       opts.inFlight !== undefined;
 
-    // Keep the trace + transient-retry wrapper identical to today's path.
-    const runDriver = (): Promise<T> => defineCrudOp(deps, collection, opName, execute, options);
+    // Keep the trace + transient-retry wrapper identical to today's path, but
+    // record the pipeline as what-was-sent so the debugbar shows the full
+    // aggregation (this covers `paginateFlexible`'s `$facet` too).
+    const runDriver = (): Promise<T> =>
+      defineCrudOp(deps, collection, opName, execute, options, false, { pipeline });
 
     // Only hash when caching (noSession is guaranteed) — a live session would
     // not serialize cleanly.

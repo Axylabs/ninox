@@ -102,6 +102,8 @@ export const makePaginateCursor = <
           .toArray();
       },
       config.queryOptions,
+      false,
+      { filter, sort: effectiveSort, limit },
     );
 
     const hasMore = rows.length > limit;

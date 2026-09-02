@@ -118,6 +118,8 @@ export interface CrudContext<
     opName: string,
     execute: (resolved: ResolvedQueryOptions) => Promise<T>,
     options?: QueryOptions,
+    /** What was sent to the DB — recorded in the debugbar as the span's params. */
+    params?: unknown,
   ) => Promise<T>;
   /** Op pipeline for writes — transient errors retried only with `retryWrites: true`. */
   writeRun: <X extends ColNames<TClients, TDb>, T>(
@@ -125,6 +127,7 @@ export interface CrudContext<
     opName: string,
     execute: (resolved: ResolvedQueryOptions) => Promise<T>,
     options?: QueryOptions,
+    params?: unknown,
   ) => Promise<T>;
   /** Drop this collection's cached reads (DB-namespaced key). */
   invalidate: (collection: ColNames<TClients, TDb>) => void;
@@ -182,7 +185,8 @@ export const createCrudContext = <
     opName: string,
     execute: (resolved: ResolvedQueryOptions) => Promise<T>,
     options?: QueryOptions,
-  ): Promise<T> => defineCrudOp(deps, collection, opName, execute, options);
+    params?: unknown,
+  ): Promise<T> => defineCrudOp(deps, collection, opName, execute, options, false, params);
 
   /** Same as `run` but for write ops — transient errors are NOT auto-retried
    * unless the caller opts in via `QueryOptions.retryWrites` (at-least-once). */
@@ -191,7 +195,8 @@ export const createCrudContext = <
     opName: string,
     execute: (resolved: ResolvedQueryOptions) => Promise<T>,
     options?: QueryOptions,
-  ): Promise<T> => defineCrudOp(deps, collection, opName, execute, options, true);
+    params?: unknown,
+  ): Promise<T> => defineCrudOp(deps, collection, opName, execute, options, true, params);
 
   const invalidate = (collection: ColNames<TClients, TDb>): void => {
     // Namespaced by DB so a write to one database never (in)validates another's
@@ -258,6 +263,13 @@ export const createCrudContext = <
   ): Promise<T> => {
     const physical = resolve(String(collection));
     const resolved = resolveQueryOptions(options);
+    // What was sent to the DB, surfaced in the debugbar as the span's `params`:
+    // the filter plus any driver options (sort/limit/projection/…) and, for
+    // `distinct`, the field. `driverOpts` is session-free by construction
+    // (session is stripped into `resolved.sdk`), so it is safe to capture.
+    const sentParams: Record<string, unknown> = { filter };
+    if (Object.keys(resolved.driverOpts).length > 0) sentParams.options = resolved.driverOpts;
+    if (keyExtra !== undefined) sentParams.field = keyExtra;
     const noSession = !resolved.sdk.session;
     const useCache = opts.cache !== undefined && noSession && resolved.cache !== false;
     const shouldDedupe =
@@ -294,7 +306,7 @@ export const createCrudContext = <
     };
 
     const executeWrapped = () =>
-      deps.trace(deps.meta(collection, opName), () =>
+      deps.trace(deps.meta(collection, opName, sentParams), () =>
         withRetry(() => execute(resolved), {
           maxAttempts: resolved.maxAttempts,
           delayMs: resolved.retryDelayMs,
