@@ -1,0 +1,10 @@
+# Pre-commit / pre-push hooks — https://github.com/evilmartians/lefthook
+# Install once per clone: `bunx lefthook install`
+
+pre-commit:
+  parallel: true
+  commands:
+    qlty:
+      # Git-aware umbrella check (oxc + actionlint + zizmor + trufflehog); only
+      # reports issues on new/changed lines. Install tools once: `qlty install`.
+      run: qlty check --no-formatters

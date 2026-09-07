@@ -86,4 +86,4 @@ how-to guide; `.agents/skills/` holds task-specific runbooks;
   change spans repos (e.g. `@ignex/ninox` ↔ `ignex-app` ↔ `@ignex/core`),
   use `bun link` against the local source instead of the registry — see
   `docs/ai/LOCAL_DEV.md`. Never publish from a linked tree; CI/releases
-  resolve from the registry (`scripts/deploy.ts`).
+  resolve from the registry (`scripts/release.ts`).

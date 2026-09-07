@@ -30,7 +30,7 @@ error taxonomy, file-based migrations, and graceful transactions. Bun-first:
 | Bench | `bun run bench` (→ `bench/results/summary.json`) |
 | Examples | `bun run examples/<file>.ts` (need live Mongo) |
 | Smoke demo | `bun run index.ts` |
-| Publish (manual) | `bun run deploy[:dry]` (verify → bump → publish → commit+tag) |
+| Publish (manual) | `bun run release[:dry]` — shared canonical flow (see `.release.json`) |
 
 ## Where things live (short map — full detail in STRUCTURE.md)
 
@@ -53,7 +53,7 @@ src/
   hooks/                    HOOK_NAMES + runHooks
   shared/ + utils/          pure helpers (pagination, keyset, lru, memoize, …)
 tests/                      bun:test suites (29) + helpers.ts + types.ts + fixtures/
-scripts/                    check-api.ts, deploy.ts (maintainer tooling)
+scripts/                    check-api.ts, release.ts (maintainer tooling)
 docs/ai/LOCAL_DEV.md        bun link workflow with the core projects
 ```
 

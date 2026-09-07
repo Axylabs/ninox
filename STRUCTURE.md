@@ -157,7 +157,7 @@ examples/                      # runnable live-Mongo examples (bun run examples/
   20-cache-watch.ts            # cacheWatch: change-stream cache invalidation
 scripts/                       # maintainer tooling (not shipped)
   check-api.ts                 # API.md ↔ src/index.ts surface consistency gate
-  deploy.ts                    # manual release: verify → bump → publish → commit+tag (--dry-run)
+  release.ts                   # canonical release: bump → verify → publish → commit+tag (--dry-run)
 .github/
   workflows/ci.yml             # typecheck + lint + audit + coverage (≥85%) + examples + replica-set jobs
 ```

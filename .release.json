@@ -1,0 +1,12 @@
+{
+  "product": "ninox",
+  "type": "single",
+  "verify": [
+    "bun run typecheck",
+    "bun run lint",
+    "bun test",
+    "bun run check:api",
+    "bun run build"
+  ],
+  "publish": { "strategy": "local", "manager": "npm" }
+}
