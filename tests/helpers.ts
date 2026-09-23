@@ -63,10 +63,30 @@ export const probeReplica = async (): Promise<boolean> => {
   }
 };
 
-/** Current server query counter (`opcounters.query`). */
+/**
+ * Server-side counters that move for a *read* a data-layer call issues.
+ *
+ * Deliberately NOT `opcounters.query`: measured on a MongoDB 7.0 standalone it
+ * counts `find` but **not** `aggregate` — and an ORM read is usually an
+ * aggregation (`countDocuments`, `$facet`, `$group`, relation joins), so every
+ * "a cold read costs one driver query" assertion silently compared 0 with 0 and
+ * the suite could not fail for the right reason. `metrics.commands.<cmd>.total`
+ * counts aggregates and finds alike, and — unlike `opcounters.command` — never
+ * counts the `serverStatus` call this helper itself makes.
+ */
+const QUERY_COMMANDS = ['aggregate', 'find', 'count', 'distinct'] as const;
+
+/**
+ * Read commands the server has executed — the driver-query counter the
+ * aggregation/pagination suites bracket a call with (delta 1 = one round trip,
+ * delta 0 = served from cache).
+ */
 export const serverQueryCount = async (db: Db): Promise<number> => {
-  const status = await db.admin().command({ serverStatus: 1 });
-  return (status as { opcounters?: { query?: number } }).opcounters?.query ?? 0;
+  const status = (await db.admin().command({ serverStatus: 1 })) as {
+    metrics?: { commands?: Record<string, { total?: number }> };
+  };
+  const commands = status.metrics?.commands ?? {};
+  return QUERY_COMMANDS.reduce((total, name) => total + (commands[name]?.total ?? 0), 0);
 };
 
 export interface EnterpriseServiceOptions {
