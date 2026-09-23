@@ -6,6 +6,33 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Client payloads fail closed (5xx never quotes internals).** `serializeError`
+  and the new `AppError.toClientPayload()` mask a 5xx `message` with the
+  canonical reason phrase (`Internal Server Error`, `Service Unavailable`,
+  `Gateway Timeout`, …) and drop `extra`; 4xx keeps its message and `extra` (the
+  caller's contract). The real message stays on the error for logs
+  (`err.message` / `err.toJSON()`, which is now documented as the LOG shape, not
+  the client path). Credentials are masked on every path that can reach a client
+  (`src/utils/redact.ts`: `scheme://user:***@host`, `token=***`).
+  - `AppError` gains a fifth constructor arg, `expose?` (default
+    `statusCode < 500`); `DomainError`/`InfraError`/`BadRequest` forward it, so a
+    5xx message can be opted in: `new InfraError(code, msg, extra, true)`.
+  - `serializeError(err, ctx, { expose: true })` is the development/trusted-caller
+    escape hatch (still masked). Unmapped errors now report
+    `httpStatusForError`'s status (503 for a transient driver error) instead of a
+    flat 500, and never leak their raw message.
+
+- **`cacheWatch` now explains WHY it disabled itself, and what to change.** Both
+  watchers (`CacheInvalidator`, hot-cache `WatchCoordinator`) classify a
+  permanent change-stream failure through `explainPermanentWatchError`:
+  `credentials` (an authenticated user with the `read` + `changeStream`
+  privilege — usually on the `authSource` database) vs `standalone` (change
+  streams need a replica set). The one-line warning carries the reason and the
+  fix, instead of a single 200-character sentence that called every case
+  "unavailable permanently".
+
 ### Added
 
 - **Debugbar now shows WHAT WAS SENT for every DB op** — `traceDbOp` previously called the ignex `debugQuery` hook with `undefined` params, so the debugbar recorded a bare `<collection>.<op>` label with no query payload. Ops now carry structured `params` (reads: `filter` + driver `options` + `distinct` field; writes: `doc` / `filter`+`update` / `replacement`; aggregations `paginateFlexible`/`pipeline`/`aggregate`: the full pipeline; cursor pagination: `filter`+`sort`+`limit`), sanitized to JSON-safe values before reaching the dashboard. `TraceDbOpOptions.debugQuery` is now an injectable seam (testable without the `@ignex/core` probe). Regression suite: `tests/trace-params.test.ts`.

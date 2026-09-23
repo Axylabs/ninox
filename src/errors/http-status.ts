@@ -3,7 +3,9 @@
  * for any thrown value) and `serializeError` (reduce any thrown value to a
  * stable, client-safe payload).
  */
-import { AppError, type ErrorContext } from './classes.ts';
+
+import { redactText } from '../utils/redact.ts';
+import { AppError, type ErrorContext, genericStatusMessage } from './classes.ts';
 import { mapMongoDriverError } from './driver-map.ts';
 import { isMongoTransientError } from './transient.ts';
 
@@ -14,8 +16,17 @@ export const httpStatusForError = (err: unknown): number => {
   return 500;
 };
 
+/** Options for {@link serializeError}. */
+export interface SerializeErrorOptions {
+  /**
+   * Include the real message (and `extra`) even for a non-exposed error — the
+   * development / trusted-caller path. It is still credential-masked.
+   */
+  expose?: boolean;
+}
+
 /**
- * Reduce any thrown value to a stable, client-safe error payload:
+ * Reduce any thrown value to a stable, CLIENT-SAFE error payload:
  * `{ name, code, message, statusCode, ...(extra) }`.
  *
  * Raw driver errors are mapped through `mapMongoDriverError` first, so a
@@ -26,12 +37,31 @@ export const httpStatusForError = (err: unknown): number => {
  *     const payload = serializeError(err, { db, collection, op });
  *     res.status(payload.statusCode).json(payload);
  *   });
+ *
+ * Fail-closed by default: a 4xx message/extra is the caller's contract, while a
+ * 5xx message is replaced by the canonical reason phrase (`Internal Server
+ * Error`, `Service Unavailable`, …) and `extra` is dropped — a driver message
+ * that quotes a host, a query or a stored value never reaches a client. The
+ * detail stays on the error itself for logs; pass `{ expose: true }` (or a
+ * per-error `expose`) to opt out for a trusted caller.
  */
-export const serializeError = (err: unknown, ctx: ErrorContext = {}): Record<string, unknown> => {
+export const serializeError = (
+  err: unknown,
+  ctx: ErrorContext = {},
+  options: SerializeErrorOptions = {},
+): Record<string, unknown> => {
   const mapped = mapMongoDriverError(err, ctx);
-  if (mapped instanceof AppError) return mapped.toJSON();
-  if (mapped instanceof Error) {
-    return { name: mapped.name, code: 'UNKNOWN', message: mapped.message, statusCode: 500 };
+  if (mapped instanceof AppError) return mapped.toClientPayload(options);
+
+  const statusCode = httpStatusForError(mapped);
+  const name = mapped instanceof Error ? mapped.name : 'UnknownError';
+  if (options.expose !== true) {
+    return { name, code: 'UNKNOWN', message: genericStatusMessage(statusCode), statusCode };
   }
-  return { name: 'UnknownError', code: 'UNKNOWN', message: String(mapped), statusCode: 500 };
+  return {
+    name,
+    code: 'UNKNOWN',
+    message: redactText(mapped instanceof Error ? mapped.message : String(mapped)),
+    statusCode,
+  };
 };

@@ -40,7 +40,11 @@
 import type { ChangeStream, Db } from 'mongodb';
 import type { LoggerLike } from '../../utils/logger.ts';
 import { sleepJittered } from '../../utils/timeout.ts';
-import { isPermanentWatchError } from '../../utils/watch-errors.ts';
+import {
+  explainPermanentWatchError,
+  isPermanentWatchError,
+  type PermanentWatchExplanation,
+} from '../../utils/watch-errors.ts';
 import { type HotCollectionRef, type RegisteredQuery, resolveWatchDb, WATCH_SEP } from './types.ts';
 
 export interface WatchHost {
@@ -236,7 +240,7 @@ export class WatchCoordinator {
         // the cache to the standalone ticker — those must stay in the retry
         // path, where the invalidate-on-reopen restores correctness.
         if (isPermanentWatchError(message)) {
-          this.markStreamFailed(key);
+          this.markStreamFailed(key, explainPermanentWatchError(message));
           return;
         }
       }
@@ -246,12 +250,15 @@ export class WatchCoordinator {
     }
   }
 
-  private markStreamFailed(key: string): void {
+  private markStreamFailed(key: string, verdict?: PermanentWatchExplanation): void {
     this.failedStreams.add(key);
     if (!this.host.isReplica()) return;
     const planned = this.plannedStreamKeys();
     if (planned.size > 0 && [...planned].every((k) => this.failedStreams.has(k))) {
-      this.host.logger.warn?.({}, 'hot cache: change streams unsupported, falling back to ticker');
+      this.host.logger.warn?.(
+        verdict === undefined ? {} : { reason: verdict.reason, hint: verdict.hint },
+        `hot cache: change streams unsupported${verdict === undefined ? '' : ` — ${verdict.headline}`}, falling back to ticker`,
+      );
       this.host.fallbackToStandalone();
     }
   }

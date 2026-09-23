@@ -17,6 +17,7 @@ import { cloneDeep } from '../src/utils/clone.ts';
 import { stableHash, stableStringify } from '../src/utils/hash.ts';
 import { LRU } from '../src/utils/lru.ts';
 import { createCachedAsyncFactory, createCachedFactory } from '../src/utils/memoize.ts';
+import { explainPermanentWatchError, isPermanentWatchError } from '../src/utils/watch-errors.ts';
 
 describe('LRU', () => {
   test('evicts least-recently-used', () => {
@@ -259,6 +260,55 @@ describe('error mapping', () => {
       statusCode: 400,
     });
   });
+
+  test('a 5xx payload never carries the operator message or extra', () => {
+    const infra = new InfraError('MONGO_QUERY_ERROR', 'aggregate failed on gigs.revenue', {
+      op: 'aggregate',
+    });
+    expect(serializeError(infra)).toEqual({
+      name: 'InfraError',
+      code: 'MONGO_QUERY_ERROR',
+      message: 'Internal Server Error',
+      statusCode: 500,
+    });
+    // The full message stays available for logs.
+    expect(infra.message).toBe('aggregate failed on gigs.revenue');
+    expect(infra.toJSON().message).toBe('aggregate failed on gigs.revenue');
+  });
+
+  test('a 504 is masked with its canonical phrase, a 4xx keeps its message', () => {
+    expect(serializeError(new InfraError('MONGO_TIMEOUT', 'operation exceeded 30s'))).toEqual({
+      name: 'InfraError',
+      code: 'MONGO_TIMEOUT',
+      message: 'Gateway Timeout',
+      statusCode: 504,
+    });
+    expect(serializeError(new DomainError('NOT_FOUND', 'Gig not found'))).toMatchObject({
+      message: 'Gig not found',
+      statusCode: 404,
+    });
+  });
+
+  test('an unmapped error is masked, and expose: true opts out (still redacted)', () => {
+    const leaky = new Error('connect failed for mongodb://root:s3cret@db:27017/app');
+    expect(serializeError(leaky)).toEqual({
+      name: 'Error',
+      code: 'UNKNOWN',
+      message: 'Internal Server Error',
+      statusCode: 500,
+    });
+    expect(serializeError(leaky, {}, { expose: true }).message).toBe(
+      'connect failed for mongodb://root:***@db:27017/app',
+    );
+  });
+
+  test('an explicit expose flag on the error reveals a 5xx message', () => {
+    const masked = new InfraError('DRAINING', 'queue is draining');
+    const exposed = new InfraError('DRAINING', 'queue is draining', undefined, true);
+    expect(serializeError(masked).message).toBe('Internal Server Error');
+    expect(serializeError(exposed).message).toBe('queue is draining');
+    expect(serializeError(masked, {}, { expose: true }).message).toBe('queue is draining');
+  });
 });
 
 describe('defineCrudOp (write-retry gating)', () => {
@@ -433,6 +483,33 @@ function merge(...parts: Array<Record<string, unknown> | undefined>): Record<str
     ...(parts as Array<Parameters<typeof mergeMongoFilters>[0] | undefined>),
   ) as Record<string, unknown>;
 }
+
+describe('watch-errors permanent classification', () => {
+  test('a missing credential is explained as a credentials problem, not "unsupported"', () => {
+    const verdict = explainPermanentWatchError('Command aggregate requires authentication');
+    expect(verdict?.reason).toBe('credentials');
+    expect(verdict?.headline).toContain('not authorized');
+    expect(verdict?.hint).toContain('changeStream');
+    expect(isPermanentWatchError('Command aggregate requires authentication')).toBe(true);
+  });
+
+  test('a standalone server is explained as a replica-set requirement', () => {
+    const verdict = explainPermanentWatchError('$changeStream is only supported on replica sets');
+    expect(verdict?.reason).toBe('standalone');
+    expect(verdict?.hint).toContain('cacheWatch: false');
+  });
+
+  test('recoverable replica errors stay retryable (no verdict)', () => {
+    for (const message of [
+      'change stream history lost',
+      'connection reset by peer',
+      'not primary',
+    ]) {
+      expect(explainPermanentWatchError(message)).toBeUndefined();
+      expect(isPermanentWatchError(message)).toBe(false);
+    }
+  });
+});
 
 describe('estimateSize coverage', () => {
   test('Map / Set / Buffer are measured (no 0-byte guard bypass)', async () => {

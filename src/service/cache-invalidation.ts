@@ -18,7 +18,7 @@ import type { QueryCache } from '../cache/query-cache.ts';
 import { cacheCollectionKey } from '../cache/query-cache.ts';
 import type { LoggerLike } from '../utils/logger.ts';
 import { sleepJittered } from '../utils/timeout.ts';
-import { isPermanentWatchError } from '../utils/watch-errors.ts';
+import { explainPermanentWatchError } from '../utils/watch-errors.ts';
 
 /** A collection whose external writes should invalidate cached reads. */
 export interface CacheInvalidationRef {
@@ -128,7 +128,8 @@ export class CacheInvalidator {
             // Best-effort — the server drops the cursor on disconnect anyway.
           }
         }
-        if (isPermanentWatchError(message)) {
+        const verdict = explainPermanentWatchError(message);
+        if (verdict) {
           // Every collection shares the same server, so one permanent verdict
           // applies to all — disable once and stop retrying. NOTE: match ONLY
           // definitive permanent errors; replica errors like "change stream
@@ -137,9 +138,16 @@ export class CacheInvalidator {
           this.disabled = true;
           if (!this.warnedUnsupported) {
             this.warnedUnsupported = true;
+            // One short line + the fix: an operator reading the log should not
+            // have to know what "permanent" means (or guess which knob to turn).
             this.logger.warn?.(
-              { collection: ref.collection, error: message },
-              'cacheWatch: change streams unavailable permanently — the query cache stays write-through only; set cache: { ttlMs } or disable cacheWatch',
+              {
+                collection: ref.collection,
+                reason: verdict.reason,
+                error: message,
+                hint: verdict.hint,
+              },
+              `cacheWatch: disabled — ${verdict.headline}; the query cache stays write-through only`,
             );
           }
           return;

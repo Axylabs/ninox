@@ -49,7 +49,7 @@ validator, and the query builder's field typing from one definition.
 
 | Export | Kind | Purpose |
 | --- | --- | --- |
-| `AppError` | V | Base error: `(code, message, statusCode, extra?)` + stable `toJSON()`. |
+| `AppError` | V | Base error: `(code, message, statusCode, extra?, expose?)` + `toJSON()` (logs) and `toClientPayload()` (clients). |
 | `DomainError` | V | Expected business violation; `statusCode` refined per code: `NOT_FOUND` → 404, `DUPLICATE_KEY`/`VERSION_CONFLICT`/`COLLECTION_EXISTS`/`SCHEMA_DRIFT` → 409, `VALIDATION_FAILED` → 422 (else 400). |
 | `InfraError` | V | Infrastructure failure; `MONGO_TIMEOUT` → 504 (else 500): `MONGO_QUERY_ERROR`, … |
 | `BadRequest` | V | Malformed caller input (400, code `BAD_REQUEST`). |
@@ -59,12 +59,28 @@ validator, and the query builder's field typing from one definition.
 | `TRANSIENT_MONGO_ERROR_CODES` | V | Server codes safe to retry. |
 | `ERROR_HTTP_STATUS` | V | `code → HTTP status` table (404/409/422/504) used to set `statusCode`. |
 | `httpStatusForError(err)` | V | Effective status for any thrown value (AppError-aware; raw → 500 / 503 transient). |
-| `serializeError(err, ctx?)` | V | Reduce any thrown value to a stable `{ name, code, message, statusCode, extra? }` client payload (maps raw driver errors first). |
+| `serializeError(err, ctx?, options?)` | V | Reduce any thrown value to a stable `{ name, code, message, statusCode, extra? }` **client** payload (maps raw driver errors first, masks credentials). |
 | `ErrorContext` | T | `{ db?, collection?, op? }` attached to mapped errors. |
 
 Driver-error mapping is **on by default** (`wrapMongoErrors: false` to opt out).
 For a framework, `serializeError(err)` is the one-liner that yields a client-safe
 JSON payload with the correct `statusCode` — no parsing of server internals.
+
+### Exposure policy (client vs. operator text)
+
+`expose` decides whether `message`/`extra` may reach a client. It defaults to
+fail-closed by status: **4xx visible** (the message is the caller's contract),
+**5xx masked** — the payload carries the canonical reason phrase
+(`Internal Server Error`, `Service Unavailable`, `Gateway Timeout`, …) plus the
+`code`, and `extra` is dropped. The real message stays on the error for logs
+(`err.message`, `err.toJSON()`, `logger.error({ err })`).
+
+- `new InfraError('DRAINING', 'queue is draining', undefined, true)` — opt a
+  5xx message in, when it was written for callers.
+- `serializeError(err, ctx, { expose: true })` — development/trusted caller:
+  include the real message (still credential-masked).
+- `err.toClientPayload()` / `serializeError(...)` are the client paths;
+  `err.toJSON()` carries the real message and is for logs and typed consumers.
 
 ## Shared helpers
 
