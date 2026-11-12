@@ -1,17 +1,18 @@
-import type { ReadConcernLike, ReadPreferenceLike, WriteConcern } from 'mongodb';
+import type {
+  CreateIndexesOptions,
+  IndexDirection,
+  ReadConcernLike,
+  ReadPreferenceLike,
+  WriteConcern,
+} from 'mongodb';
 import type { HookMap } from './hooks/hooks.ts';
 import type { InferDoc } from './schema/infer.ts';
 import type { ObjectField } from './schema/types.ts';
 
 /** A Mongo index definition usable by `createIndexes`. */
 export interface IndexSpec {
-  key: Record<string, 1 | -1 | 'text' | 'hashed' | '2dsphere'>;
-  options?: {
-    name?: string;
-    unique?: boolean;
-    sparse?: boolean;
-    expireAfterSeconds?: number;
-  };
+  key: Record<string, IndexDirection>;
+  options?: CreateIndexesOptions;
 }
 
 /** Auto-timestamp field names maintained by the ORM when `timestamps` is set. */
@@ -60,6 +61,8 @@ export interface DBClientDefinition<
   /** Per-logical-collection physical-name overrides. */
   collectionPhysicalNames?: Partial<Record<string, string>>;
   connectTimeoutMs?: number;
+  /** Enable driver command events before pools open (required for wire tracing). */
+  monitorCommands?: boolean;
   readPreference?: ReadPreferenceLike;
   readConcern?: ReadConcernLike;
   writeConcern?: WriteConcern;

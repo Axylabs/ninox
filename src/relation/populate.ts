@@ -1,4 +1,5 @@
-import type { Document, Filter } from 'mongodb';
+import type { ClientSession, Document, Filter, ReadConcernLike, ReadPreferenceLike } from 'mongodb';
+import { BadRequest } from '../errors/index.ts';
 import { canonicalKey, DataLoader } from '../loader/dataloader.ts';
 import type { RelationDef } from './relation.ts';
 
@@ -7,19 +8,30 @@ export interface PopulateDeps {
   findMany: (
     collection: string,
     filter: Filter<Document>,
-    options?: { projection?: Document; limit?: number },
+    options?: {
+      projection?: Document;
+      limit?: number;
+      session?: ClientSession;
+      maxTimeMS?: number;
+      readPreference?: ReadPreferenceLike;
+      readConcern?: ReadConcernLike;
+      queryCache?: boolean;
+    },
   ) => Promise<Document[]>;
 }
 
 export interface PopulateOptions {
   maxBatchSize?: number;
+  /** Cache keys only within this populate call (default true). */
   cache?: boolean;
-  /**
-   * Cap on docs fetched per foreign-key batch (default 10_000). A `hasMany` /
-   * `manyToMany` relation with more children than this is silently truncated —
-   * raise the cap when you expect larger joins.
-   */
+  /** Opt into the shared read-through query cache (default false for fresh joins). */
+  queryCache?: boolean;
+  /** Safety cap per foreign-key batch. Exceeding it throws instead of truncating. */
   maxDocs?: number;
+  session?: ClientSession;
+  maxTimeMS?: number;
+  readPreference?: ReadPreferenceLike;
+  readConcern?: ReadConcernLike;
 }
 
 /**
@@ -42,9 +54,21 @@ const createForeignKeyLoader = (
         collection,
         { [foreignField]: { $in: keys } },
         {
-          ...(options.maxDocs !== undefined ? { limit: options.maxDocs } : {}),
+          limit: options.maxDocs !== undefined ? options.maxDocs + 1 : 0,
+          ...(options.session !== undefined ? { session: options.session } : {}),
+          ...(options.maxTimeMS !== undefined ? { maxTimeMS: options.maxTimeMS } : {}),
+          ...(options.readPreference !== undefined
+            ? { readPreference: options.readPreference }
+            : {}),
+          ...(options.readConcern !== undefined ? { readConcern: options.readConcern } : {}),
+          ...(options.queryCache !== undefined ? { queryCache: options.queryCache } : {}),
         },
       );
+      if (options.maxDocs !== undefined && docs.length > options.maxDocs) {
+        throw new BadRequest(
+          `populate: ${collection}.${foreignField} exceeded maxDocs ${options.maxDocs}; raise the cap or narrow the relation`,
+        );
+      }
       // Index foreign docs by canonical key value so distinct-but-equal keys
       // (e.g. two ObjectId instances with the same hex) resolve correctly.
       const index = new Map<string, Document[]>();

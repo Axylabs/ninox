@@ -8,6 +8,7 @@
  * without importing the orchestrator — breaking the import cycle and keeping
  * every field-kind rule small, isolated, and independently readable.
  */
+import { isIP } from 'node:net';
 import { Decimal128, type Document, Long, ObjectId } from 'mongodb';
 import type {
   ArrayField,
@@ -17,10 +18,12 @@ import type {
   LongField,
   NumberField,
   ObjectField,
+  RawField,
   SchemaType,
   StringField,
 } from '../types.ts';
 import { checkNumericBounds, describeValue, isPlainObject, push } from './helpers.ts';
+import { validateRawSchema } from './raw.ts';
 import type { DriftIssue } from './types.ts';
 
 /** The recursive entry points the per-kind validators use to descend. */
@@ -66,6 +69,25 @@ const compiledPattern = (field: StringField): RegExp | undefined => {
   }
 };
 
+const STRING_FORMAT_VALIDATORS: Record<string, (value: string) => boolean> = {
+  email: (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value),
+  uri: (value) => {
+    try {
+      return new URL(value).protocol.length > 0;
+    } catch {
+      return false;
+    }
+  },
+  'date-time': (value) => /^\d{4}-\d{2}-\d{2}T/.test(value) && !Number.isNaN(Date.parse(value)),
+  date: (value) =>
+    /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)),
+  uuid: (value) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value),
+  hostname: (value) => /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(value),
+  ipv4: (value) => isIP(value) === 4,
+  ipv6: (value) => isIP(value) === 6,
+};
+
 const stringValidator: FieldValidator = (_deps, field, value, path, issues) => {
   const f = field as StringField;
   if (typeof value !== 'string') {
@@ -98,6 +120,16 @@ const stringValidator: FieldValidator = (_deps, field, value, path, issues) => {
       'constraint',
       `string(pattern ${f.pattern})`,
       `"${value}" does not match pattern`,
+    );
+  }
+  const format = f.format ? STRING_FORMAT_VALIDATORS[f.format] : undefined;
+  if (format && !format(value)) {
+    push(
+      issues,
+      path,
+      'constraint',
+      `string(format ${f.format})`,
+      `"${value}" is not a valid ${f.format}`,
     );
   }
 };
@@ -192,9 +224,8 @@ const anyValidator: FieldValidator = () => {
   // `any` accepts any value — nothing to check.
 };
 
-const rawValidator: FieldValidator = () => {
-  // Raw `$jsonSchema` fragments are passed through verbatim and aren't
-  // re-checked on the read side (the server enforces them on write).
+const rawValidator: FieldValidator = (_deps, field, value, path, issues) => {
+  validateRawSchema((field as RawField).fragment, value, path, issues);
 };
 
 const enumValidator: FieldValidator = (_deps, field, value, path, issues) => {

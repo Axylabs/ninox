@@ -7,6 +7,7 @@
 import { QueryCache, type QueryCacheOptions } from '../cache/query-cache.ts';
 import type { DriftMode } from '../schema/validate-doc/index.ts';
 import { createConsoleLogger, type LoggerLike } from '../utils/logger.ts';
+import type { DebugQuery } from './trace-db-op.ts';
 
 /**
  * Performance is ON by default. Resolve the service-level cache:
@@ -27,6 +28,8 @@ export interface MongoServiceConfig {
   migrationDir?: string;
   appName?: string;
   logger?: LoggerLike;
+  /** Explicit host tracer (Ignex debugQuery); null disables the optional probe. */
+  debugQuery?: DebugQuery | null;
   /**
    * Map driver errors to typed DomainError/InfraError before rethrowing. ON by
    * default — set `false` to surface raw driver errors instead.
@@ -40,9 +43,9 @@ export interface MongoServiceConfig {
    * INVALIDATION: entries are dropped write-through — every ORM write
    * invalidates that collection's cached reads. External writers (other
    * processes, the raw `client` escape hatch, direct DB writes) do NOT
-   * invalidate; with the default `ttlMs: 0` those reads stay stale
-   * indefinitely, so multi-writer deployments should set `QueryCacheOptions.ttlMs`,
-   * disable the cache, route latency-critical reads through the
+   * invalidate. The default 30-second TTL bounds staleness; `ttlMs: 0`
+   * explicitly selects unbounded entries. Multi-writer deployments can disable
+   * the cache, route latency-critical reads through the
    * change-stream aware `createHotCache()`, or set `cacheWatch: true`.
    */
   cache?: QueryCache | QueryCacheOptions | null;
@@ -57,6 +60,8 @@ export interface MongoServiceConfig {
    * `closeConnections()`. Default: false.
    */
   cacheWatch?: boolean;
+  /** Permit transaction callbacks to run non-atomically on unsupported servers. Default: false. */
+  allowNonTransactionalFallback?: boolean;
   /** Coalesce identical concurrent reads into one driver call. ON by default. */
   dedupeReads?: boolean;
   /**
@@ -64,6 +69,8 @@ export interface MongoServiceConfig {
    * in-flight dedup even when the granular options are set. Defaults to true.
    */
   perf?: boolean;
+  /** Validate inserts and replacements against the schema before sending them. Default: true. */
+  validateWrites?: boolean;
   /**
    * Schema-drift policy for reads. When a document fetched from the DB
    * (cache-miss) doesn't match its declared schema:
@@ -71,8 +78,8 @@ export interface MongoServiceConfig {
    *   - `'throw'` — throw `DomainError SCHEMA_DRIFT` (the document is never
    *     cached or returned)
    *   - `'off'` — no drift checking (previous behavior)
-   * Detection-only: documents are never mutated. Projected/partial reads are
-   * skipped. Overridable per op via `QueryOptions.drift`.
+   * Detection-only: documents are never mutated. Projected reads ignore absent
+   * fields but validate returned values. Overridable via `QueryOptions.drift`.
    */
   drift?: DriftMode;
 }

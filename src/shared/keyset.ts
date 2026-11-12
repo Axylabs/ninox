@@ -12,12 +12,15 @@
  */
 
 import type { Document } from 'mongodb';
-import { ObjectId } from 'mongodb';
+import { BSON, ObjectId } from 'mongodb';
+
+const { EJSON } = BSON;
+
 import { BadRequest } from '../errors/index.ts';
 
 /** Serializable, tagged representation of a cursor boundary value. */
 type TaggedValue = {
-  t: 'oid' | 'date' | 'string' | 'number' | 'boolean' | 'null';
+  t: 'oid' | 'date' | 'string' | 'number' | 'boolean' | 'null' | 'bson';
   v?: string | number | boolean;
 };
 
@@ -35,6 +38,9 @@ const tag = (value: unknown): TaggedValue => {
   if (typeof value === 'number') return { t: 'number', v: value };
   if (typeof value === 'boolean') return { t: 'boolean', v: value };
   if (value === null || value === undefined) return { t: 'null' };
+  if (typeof value === 'object' && '_bsontype' in value) {
+    return { t: 'bson', v: EJSON.stringify(value, { relaxed: false }) };
+  }
   // A drifted sort-field value (object/array/…) cannot be encoded losslessly
   // into a cursor — a `String(value)` fallback would silently corrupt
   // pagination (the decoded boundary could never compare against the real
@@ -73,6 +79,11 @@ const untag = (tagged: TaggedValue): unknown => {
       return tagged.v;
     case 'null':
       return null;
+    case 'bson':
+      if (typeof tagged.v !== 'string') {
+        throw new BadRequest('paginateCursor: invalid cursor — BSON value must be a string');
+      }
+      return EJSON.parse(tagged.v, { relaxed: false });
   }
 };
 

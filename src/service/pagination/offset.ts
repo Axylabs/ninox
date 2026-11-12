@@ -5,6 +5,7 @@
  * — the ORM's key pagination perf win vs the classic count-then-find pattern.
  */
 import type { Abortable, AggregateOptions, Document } from 'mongodb';
+import { BadRequest } from '../../errors/index.ts';
 import { DEFAULT_FIND_LIMIT, DEFAULT_MAX_LIMIT } from '../../shared/constants.ts';
 import type { FilterInput } from '../../shared/filter-types.ts';
 import { normalizePageLimit } from '../../shared/pagination-math.ts';
@@ -41,6 +42,13 @@ export const makePaginateFlexible = <
       // APIs used to disagree silently (10 vs 100).
       { limit: DEFAULT_FIND_LIMIT },
     );
+
+    const maxOffset = config.maxOffset ?? 10_000;
+    if (normalized.offset > maxOffset) {
+      throw new BadRequest(
+        `paginateFlexible: offset ${normalized.offset} exceeds maxOffset ${maxOffset}; use paginateCursor for deep pages`,
+      );
+    }
 
     const dataStages: Document[] = [
       ...(config.prePipeline ?? []),
@@ -83,21 +91,18 @@ export const makePaginateFlexible = <
           | undefined;
         const data = row?.data ?? [];
         const totalCount = row?.totalCount?.[0]?.count ?? 0;
-        // Projected (lean) pages intentionally lack the collection's full field
-        // set, so the schema-drift check is meaningless for them — skip it.
-        if (config.projection === undefined) {
-          checkDocsDrift(
-            {
-              logger,
-              db: dbLabel,
-              drift: resolveDriftMode(config.queryOptions?.drift, opts.drift),
-              ...(opts.getSchema !== undefined ? { getSchema: opts.getSchema } : {}),
-            },
-            String(collection),
-            'mongo.paginateFlexible',
-            data as Document[],
-          );
-        }
+        checkDocsDrift(
+          {
+            logger,
+            db: dbLabel,
+            drift: resolveDriftMode(config.queryOptions?.drift, opts.drift),
+            ...(opts.getSchema !== undefined ? { getSchema: opts.getSchema } : {}),
+            partial: config.projection !== undefined,
+          },
+          String(collection),
+          'mongo.paginateFlexible',
+          data as Document[],
+        );
         return buildPaginationResult(data, totalCount, normalized.page, normalized.limit);
       },
     });

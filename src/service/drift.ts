@@ -20,6 +20,8 @@ export interface DriftCheckerOptions {
   drift: DriftMode;
   /** Resolve the declared schema for a logical collection. */
   getSchema?: (logical: string) => ObjectField | undefined;
+  /** Projection-aware validation: ignore absent fields, but validate present values. */
+  partial?: boolean;
 }
 
 /**
@@ -37,7 +39,9 @@ export const checkDocsDrift = (
   const schema = options.getSchema?.(collection);
   if (!schema) return;
   for (const doc of docs) {
-    const issues = validateDoc(schema, doc);
+    const issues = validateDoc(schema, doc).filter(
+      (issue) => options.partial !== true || issue.code !== 'missing',
+    );
     if (issues.length === 0) continue;
     const detail = issues.map((i) => `${i.path}: ${i.message}`).join('; ');
     const extra = { collection, db: options.db, op, issues };

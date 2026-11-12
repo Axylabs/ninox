@@ -40,7 +40,12 @@ import { collectAggSources, isCacheablePipeline } from './helpers.ts';
 export type CachedAggregateCtx<C extends string> = {
   client: Db;
   deps: OpDeps<C>;
-  opts: { cache?: QueryCache; dedupeReads: boolean; inFlight?: InFlight };
+  opts: {
+    cache?: QueryCache;
+    dedupeReads: boolean;
+    inFlight?: InFlight;
+    cacheNamespace?: string;
+  };
   resolve: (logical: string) => string;
 };
 
@@ -82,7 +87,7 @@ export const createCachedAggregate = <C extends string>(ctx: CachedAggregateCtx<
     // not serialize cleanly.
     const key = useCache
       ? cache!.key(
-          cacheCollectionKey(client.databaseName, physical),
+          cacheCollectionKey(client.databaseName, physical, opts.cacheNamespace),
           stableHash([opName, pipeline, options]),
         )
       : undefined;
@@ -94,9 +99,9 @@ export const createCachedAggregate = <C extends string>(ctx: CachedAggregateCtx<
     const toSourceKeys = () =>
       collectAggSources(String(collection), pipeline, sources).map((name) => {
         try {
-          return cacheCollectionKey(client.databaseName, resolve(name));
+          return cacheCollectionKey(client.databaseName, resolve(name), opts.cacheNamespace);
         } catch {
-          return cacheCollectionKey(client.databaseName, name);
+          return cacheCollectionKey(client.databaseName, name, opts.cacheNamespace);
         }
       });
 
@@ -105,7 +110,7 @@ export const createCachedAggregate = <C extends string>(ctx: CachedAggregateCtx<
         // Capture the version of EVERY source collection before fetching so a
         // write to any of them mid-flight can never be hidden by a late set.
         const sourceKeys = toSourceKeys();
-        const primaryKey = cacheCollectionKey(client.databaseName, physical);
+        const primaryKey = cacheCollectionKey(client.databaseName, physical, opts.cacheNamespace);
         const versions: Record<string, number> = { [primaryKey]: cache!.versionOf(primaryKey) };
         for (const col of sourceKeys) {
           if (!(col in versions)) versions[col] = cache!.versionOf(col);
@@ -123,8 +128,13 @@ export const createCachedAggregate = <C extends string>(ctx: CachedAggregateCtx<
     if (shouldDedupe) {
       // Version-scoped like the CRUD read path: a post-invalidation reader must
       // not join a pre-invalidation in-flight aggregation.
-      const primaryKey = cacheCollectionKey(client.databaseName, physical);
-      const gen = cache !== undefined ? cache.versionOf(primaryKey) : '';
+      const primaryKey = cacheCollectionKey(client.databaseName, physical, opts.cacheNamespace);
+      const gen =
+        cache !== undefined
+          ? toSourceKeys()
+              .map((source) => `${source}:${cache.versionOf(source)}`)
+              .join('|')
+          : '';
       const dedupeKey = `${primaryKey}|${gen}|${opName}|${stableHash([pipeline, options])}`;
       return await opts.inFlight!.run(dedupeKey, runOnce);
     }

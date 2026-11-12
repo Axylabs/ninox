@@ -1,9 +1,20 @@
 import { describe, expect, test } from 'bun:test';
 import { InFlight } from '../src/cache/in-flight.ts';
-import { QueryCache } from '../src/cache/query-cache.ts';
+import { cacheCollectionKey, QueryCache } from '../src/cache/query-cache.ts';
 import { stableHash } from '../src/utils/hash.ts';
 
 describe('QueryCache', () => {
+  test('cluster namespaces isolate identical database and collection names', () => {
+    const a = cacheCollectionKey('app', 'users', 'cluster-a');
+    const b = cacheCollectionKey('app', 'users', 'cluster-b');
+    expect(a).not.toBe(b);
+    const cache = new QueryCache();
+    cache.set(cache.key(a, 'query'), 'cluster-a-result');
+    expect(cache.get(cache.key(b, 'query'))).toBeUndefined();
+    cache.invalidateByCollection(b);
+    expect(cache.get(cache.key(a, 'query'))).toBe('cluster-a-result');
+  });
+
   test('set/get roundtrip', () => {
     const cache = new QueryCache();
     const key = cache.key('users', stableHash([{ role: 'admin' }]));
@@ -56,6 +67,20 @@ describe('QueryCache', () => {
     cache.set(key, [{ _id: 'o2' }], undefined, ['customers']);
     expect(cache.get(key)).toEqual([{ _id: 'o2' }]);
     cache.invalidateByCollection('orders');
+    expect(cache.get(key)).toBeUndefined();
+  });
+
+  test('overwriting a key replaces its source-collection indexes', () => {
+    const cache = new QueryCache();
+    const key = cache.key('orders', 'joined-1');
+    cache.set(key, 'old', undefined, ['customers']);
+    cache.set(key, 'new', undefined, ['products']);
+
+    cache.invalidateByCollection('customers');
+    expect(cache.get(key)).toBe('new');
+    expect(cache.stats().invalidateEvents).toBe(0);
+
+    cache.invalidateByCollection('products');
     expect(cache.get(key)).toBeUndefined();
   });
 
@@ -145,12 +170,20 @@ describe('QueryCache', () => {
     expect(second.tags).toEqual(['a']); // stored entry untouched
   });
 
-  test('clone: false shares the same reference by default', () => {
+  test('clone defaults to mutation isolation', () => {
     const cache = new QueryCache();
     const key = cache.key('users', '1');
     cache.set(key, { tags: ['a'] });
     const value = cache.get(key) as { tags: string[] };
     value.tags.push('b');
+    expect((cache.get(key) as { tags: string[] }).tags).toEqual(['a']);
+  });
+
+  test('clone: false explicitly opts into shared references', () => {
+    const cache = new QueryCache({ clone: false });
+    const key = cache.key('users', '1');
+    cache.set(key, { tags: ['a'] });
+    (cache.get(key) as { tags: string[] }).tags.push('b');
     expect((cache.get(key) as { tags: string[] }).tags).toEqual(['a', 'b']);
   });
 

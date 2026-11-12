@@ -35,7 +35,8 @@ src/
     validate-doc/              # ★ runtime read-side drift check: validateDoc(schema, doc) → DriftIssue[]
       types.ts                 # DriftMode / DriftIssue / DriftIssueCode
       helpers.ts               # value-level checks (numeric bounds, bsonType, reserved fields)
-      field-validators.ts      # ★ per-kind validator registry (functional replacement for the switch)
+      field-validators.ts      # ★ per-kind validator registry + string formats
+      raw.ts                   # raw MongoDB $jsonSchema drift validation
       validate.ts              # dispatch + object traversal + validateDoc
       index.ts
     index.ts
@@ -132,6 +133,9 @@ src/
     hooks.ts                   # HookMap / runHooks
 
 tests/                         # bun:test suites (see README)
+  e2e/framework.e2e.test.ts    # public-API workflows on standalone + replica MongoDB
+  migrations.test.ts           # lease takeover + owner-fencing failure injection
+  schema-safety.test.ts        # non-destructive schema provisioning failures
   pipeline.test.ts             # runtime suite for the typed aggregation pipeline
   agg-cache.test.ts            # aggregation caching (write-through, joins, bypasses, dedup)
   hot-cache.test.ts            # HotCache unit + standalone ticker + replica fallback

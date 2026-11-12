@@ -42,8 +42,9 @@ export const makeConnectionFactory = <TClients extends DbClientsDefinition>(
 ) => {
   /** In-progress connects by URL (cleared once settled). */
   const connecting = new Map<string, Promise<MongoClient>>();
+  let transition = Promise.resolve();
 
-  return async (names?: (keyof TClients & string)[]): Promise<void> => {
+  const connect = async (names?: (keyof TClients & string)[]): Promise<void> => {
     const keys = (names && names.length > 0 ? names : Object.keys(dbClients)) as Array<
       keyof TClients & string
     >;
@@ -65,6 +66,7 @@ export const makeConnectionFactory = <TClients extends DbClientsDefinition>(
               const c = new MongoClient(dbUrl, {
                 connectTimeoutMS: definition.connectTimeoutMs ?? 10_000,
                 serverSelectionTimeoutMS: definition.connectTimeoutMs ?? 10_000,
+                monitorCommands: definition.monitorCommands ?? false,
                 ...(definition.readPreference && { readPreference: definition.readPreference }),
                 ...(definition.readConcern && { readConcern: definition.readConcern }),
                 ...(definition.writeConcern && { writeConcern: definition.writeConcern }),
@@ -100,19 +102,23 @@ export const makeConnectionFactory = <TClients extends DbClientsDefinition>(
       throw err;
     }
   };
+
+  return (names?: (keyof TClients & string)[]): Promise<void> => {
+    const result = transition.then(() => connect(names));
+    transition = result.catch(() => {});
+    return result;
+  };
 };
 
-/** Close every pooled client and clear the pool. Never throws — each close is
- * guarded against both sync throws and rejections (the driver can throw a
- * `MongoClientClosedError` when a connection is still checked out at close). */
+/** Close every pooled client and clear the pool. All closes are attempted and
+ * any failures are surfaced together after the pool has been cleared. */
 export const closeConnections = async (openedClients: Map<string, MongoClient>): Promise<void> => {
-  const closes = [...openedClients.values()].map((client) => {
-    try {
-      return Promise.resolve(client.close()).catch(() => {});
-    } catch {
-      return Promise.resolve();
-    }
-  });
-  await Promise.allSettled(closes);
+  const results = await Promise.allSettled(
+    [...openedClients.values()].map((client) => client.close()),
+  );
   openedClients.clear();
+  const errors = results
+    .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    .map((result) => result.reason as unknown);
+  if (errors.length > 0) throw new AggregateError(errors, 'Failed to close MongoDB connections');
 };

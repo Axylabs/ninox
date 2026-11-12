@@ -168,4 +168,28 @@ describe('populate (DataLoader-batched relations)', () => {
     expect(populated[42]!.user).toMatchObject({ _id: 'u42' });
     expect(queries).toEqual(['users']);
   });
+
+  test('maxDocs throws instead of silently truncating a relation', async () => {
+    const { deps } = makeFakeDb({
+      orders: [
+        { _id: 'o1', userId: 'u1' },
+        { _id: 'o2', userId: 'u1' },
+      ],
+    });
+    const populator = makePopulator(deps);
+    await expect(
+      populator.populate(
+        [{ _id: 'u1' }],
+        [
+          hasMany({
+            collection: 'orders',
+            localField: '_id',
+            foreignField: 'userId',
+            as: 'orders',
+          }),
+        ],
+        { maxDocs: 1 },
+      ),
+    ).rejects.toThrow(/exceeded maxDocs 1/);
+  });
 });

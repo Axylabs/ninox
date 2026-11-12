@@ -337,11 +337,13 @@ maybe('automatic optimizations — real ORM, no side effects', () => {
           })
         : // Standalone graceful fallback runs the callback with a null session →
           // no transaction, so concurrent identical reads are safe (deduped).
-          db.transaction(async (session: ClientSession | null) =>
-            Promise.all([
-              db.countDocuments('orders', { _id: insertedId }, { session: session ?? undefined }),
-              db.countDocuments('orders', { _id: insertedId }, { session: session ?? undefined }),
-            ]),
+          db.transaction(
+            async (session: ClientSession | null) =>
+              Promise.all([
+                db.countDocuments('orders', { _id: insertedId }, { session: session ?? undefined }),
+                db.countDocuments('orders', { _id: insertedId }, { session: session ?? undefined }),
+              ]),
+            { allowNonTransactionalFallback: true },
           ));
       expect(values).toEqual([1, 1]);
     });

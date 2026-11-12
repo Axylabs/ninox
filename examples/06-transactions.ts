@@ -2,9 +2,8 @@
  * Transactions — graceful fallback on standalone servers.
  *
  * `db.transaction(fn(session))` runs inside a real session transaction when the
- * server supports it (replica set), and transparently falls back to
- * non-transactional execution on standalone. `withGracefulMongoTransaction`
- * adds a capability probe + explicit fallback.
+ * server supports it (replica set). Non-atomic standalone execution requires
+ * the explicit `allowNonTransactionalFallback` option in both APIs.
  *
  *   bun run examples/06-transactions.ts
  */
@@ -24,18 +23,21 @@ const run = async () => {
   });
 
   // Service-level transaction (falls back to non-transactional on standalone).
-  await db.transaction(async (session) => {
-    await db.insertOne(
-      'orders',
-      { userId, total: 9.99, status: 'pending', createdAt: new Date() },
-      { ...(session != null ? { session } : {}) },
-    );
-    await db.insertOne(
-      'orders',
-      { userId, total: 4.5, status: 'pending', createdAt: new Date() },
-      { ...(session != null ? { session } : {}) },
-    );
-  });
+  await db.transaction(
+    async (session) => {
+      await db.insertOne(
+        'orders',
+        { userId, total: 9.99, status: 'pending', createdAt: new Date() },
+        { ...(session != null ? { session } : {}) },
+      );
+      await db.insertOne(
+        'orders',
+        { userId, total: 4.5, status: 'pending', createdAt: new Date() },
+        { ...(session != null ? { session } : {}) },
+      );
+    },
+    { allowNonTransactionalFallback: true },
+  );
   console.log('orders in transaction:', await db.countDocuments('orders', {}));
 
   // Explicit graceful wrapper with a capability probe + fallback.
@@ -49,7 +51,7 @@ const run = async () => {
         { ...(session != null ? { session } : {}) },
       );
     },
-    { capabilities: caps, urlHint: MONGO_URL },
+    { capabilities: caps, urlHint: MONGO_URL, allowNonTransactionalFallback: true },
   );
   console.log('orders after graceful transaction:', await db.countDocuments('orders', {}));
 

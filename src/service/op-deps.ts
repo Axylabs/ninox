@@ -7,7 +7,7 @@
  * wrapMongoErrors)` so the boilerplate lives in exactly one place.
  */
 import type { LoggerLike } from '../utils/logger.ts';
-import type { DbOpMeta } from './trace-db-op.ts';
+import type { DbOpMeta, DebugQuery } from './trace-db-op.ts';
 import { traceDbOp } from './trace-db-op.ts';
 
 export interface OpDeps<TC> {
@@ -23,9 +23,10 @@ export const makeOpDeps = <TC>(
   dbLabel: string,
   resolve: (logical: string) => string,
   wrapMongoErrors: boolean,
+  debugQuery?: DebugQuery | null,
 ): OpDeps<TC> => {
   const trace = <T>(meta: DbOpMeta, fn: () => T | Promise<T>): Promise<T> =>
-    traceDbOp(logger, meta, fn, { wrapMongoErrors });
+    traceDbOp(logger, meta, fn, { wrapMongoErrors, ...(debugQuery !== undefined ? { debugQuery } : {}) });
   const meta = (collection: TC, op: string, params?: unknown): DbOpMeta => ({
     collection: String(collection),
     physicalCollection: resolve(String(collection)),

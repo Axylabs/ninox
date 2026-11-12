@@ -53,18 +53,22 @@ jobs:
       - run: bun audit
 
   test:
-    name: Tests + coverage (Mongo 7 standalone)
+    name: E2E Mongo ${{ matrix.mongo }} / full tests + coverage on 7
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mongo: ['4.4', '5.0', '6.0', '7.0', '8.0']
     services:
       mongo:
-        image: mongo:7
+        image: mongo:${{ matrix.mongo }}
         ports:
           - 27017:27017
         env:
           MONGO_INITDB_ROOT_USERNAME: admin
           MONGO_INITDB_ROOT_PASSWORD: admin
         options: >-
-          --health-cmd "mongosh --quiet --eval 'quit(db.runCommand({ ping: 1 }).ok ? 0 : 2)' --username admin --password admin --authenticationDatabase admin"
+          --health-cmd "${{ matrix.mongo == '4.4' && 'mongo' || 'mongosh' }} --quiet --eval 'quit(db.runCommand({ ping: 1 }).ok ? 0 : 2)' --username admin --password admin --authenticationDatabase admin"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -81,8 +85,12 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - name: Run tests with coverage (lcov)
+        if: matrix.mongo == '7.0'
         run: bun test --coverage --coverage-reporter=lcov
+      - name: Run public API end-to-end workflows
+        run: bun run test:e2e
       - name: Enforce coverage threshold (>= 85% lines)
+        if: matrix.mongo == '7.0'
         run: |
           awk '
             /^LF:/ { sub(/^LF:/, ""); lf += $0 }
@@ -95,6 +103,7 @@ jobs:
           ' coverage/lcov.info
       - name: Upload coverage artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: matrix.mongo == '7.0'
         with:
           name: coverage-lcov
           path: coverage/lcov.info
@@ -158,12 +167,29 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Run replica-only + hot-cache suites
         run: bun test tests/hot-cache.test.ts tests/hot-cache-mongo.test.ts tests/hot-cache-resync.test.ts tests/cache-invalidation.test.ts
+      - name: Run e2e transaction commit/rollback against a replica set
+        run: bun run test:e2e
 
   # Publishability gate: build → npm pack → install the tarball in a fresh
   # Node consumer → typecheck (NodeNext) + run against the built dist.
   package:
-    name: Package smoke (npm pack → Node consumer)
+    name: Package e2e (npm pack → Node + MongoDB)
     runs-on: ubuntu-latest
+    env:
+      MONGO_URL: mongodb://admin:admin@localhost:27017/
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        env:
+          MONGO_INITDB_ROOT_USERNAME: admin
+          MONGO_INITDB_ROOT_PASSWORD: admin
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.runCommand({ ping: 1 }).ok ? 0 : 2)' --username admin --password admin --authenticationDatabase admin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -187,11 +213,30 @@ jobs:
           npm i "$TGZ" typescript@^6.0.3 @types/node@^24 >/dev/null 2>&1
           # Runtime check against the built dist (plain Node ESM)
           cat > index.mjs <<'EOF'
-          import { s, toMongoValidator } from '@ignex/ninox';
+          import { createMongoService, s, toMongoValidator } from '@ignex/ninox';
           import { stableHash } from '@ignex/ninox/utils';
-          const v = toMongoValidator(s.object({ _id: s.objectId() }, { name: 'x' }));
+          const users = s.object({ _id: s.objectId(), email: s.string({ format: 'email' }) });
+          const v = toMongoValidator(users);
           if (!v.$jsonSchema || v.$jsonSchema.bsonType !== 'object') process.exit(1);
-          console.log('consumer-ok', stableHash(['x', 1]));
+          const service = createMongoService({
+            primary: { name: 'ninox_package_e2e', dbUrl: process.env.MONGO_URL, collections: { users } },
+          });
+          await service.makeConnections();
+          const db = service.db.primaryClient;
+          try {
+            await db.client.dropDatabase();
+            await db.createSchema('users');
+            const { insertedId } = await db.insertOne('users', { email: 'node@example.com' });
+            const page = await db.paginateFlexible('users', {}, { limit: 10 });
+            if (page.totalCount !== 1) throw new Error('packaged pagination failed');
+            if ((await db.getOne('users', { _id: insertedId }))?.email !== 'node@example.com') {
+              throw new Error('packaged CRUD failed');
+            }
+          } finally {
+            await db.client.dropDatabase();
+            await service.closeConnections();
+          }
+          console.log('consumer-e2e-ok', stableHash(['x', 1]));
           EOF
           node index.mjs
           # Typecheck against the published d.ts (NodeNext resolution)

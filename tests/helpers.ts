@@ -132,6 +132,7 @@ export const makeEnterpriseService = async (
     },
     {
       logger: options.logger ?? noopLogger,
+      allowNonTransactionalFallback: true,
       ...(options.cache !== undefined ? { cache: options.cache } : {}),
       ...(options.cacheWatch !== undefined ? { cacheWatch: options.cacheWatch } : {}),
       ...(options.dedupeReads !== undefined ? { dedupeReads: options.dedupeReads } : {}),

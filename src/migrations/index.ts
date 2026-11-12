@@ -6,9 +6,8 @@
  *   - `./journal.ts` — lease-based `_migrations` journal (atomic, crash-safe)
  *
  * `up()` applies pending migrations in numeric order under an exclusive claim
- * with an auto-renewed lease (long migrations can't be stolen by another
- * runner, but a crashed runner's claim expires); `down()` rolls back applied
- * migrations in reverse order and validates its target BEFORE destroying
+ * with an auto-renewed, owner-fenced lease; `down()` uses the same fencing,
+ * rolls back in reverse order, and validates its target BEFORE destroying
  * anything; `status()` reports applied/pending; `create()` scaffolds a new file
  * atomically (`wx` — concurrent scaffolds never clobber each other).
  */
@@ -59,11 +58,15 @@ export const createMongoMigrationRunner = (
     return db;
   };
 
-  /** Heartbeat that keeps a running claim's lease alive during a long `up()`. */
-  const startHeartbeat = (journal: ReturnType<typeof createMigrationJournal>, name: string) => {
+  /** Heartbeat that keeps a running claim's lease alive during a long operation. */
+  const startHeartbeat = (
+    journal: ReturnType<typeof createMigrationJournal>,
+    name: string,
+    claimId: string,
+  ) => {
     const timer = setInterval(
       () => {
-        void journal.renew(name, leaseMs).catch(() => {});
+        void journal.renew(name, claimId, leaseMs).catch(() => {});
       },
       Math.max(leaseMs / 2, 1_000),
     );
@@ -86,19 +89,20 @@ export const createMongoMigrationRunner = (
       // Exclusive lease-based claim: fresh rows insert, expired claims steal,
       // applied/live rows reject. `status` flips to `applied` only AFTER
       // `up()` succeeds.
-      if (!(await journal.claim(migration.name, basename(file), leaseMs))) {
+      const claimId = await journal.claim(migration.name, basename(file), leaseMs);
+      if (claimId === null) {
         logger.info(
           { name: migration.name },
           'migration claimed by another runner or already applied, skipping',
         );
         continue;
       }
-      const stopHeartbeat = startHeartbeat(journal, migration.name);
+      const stopHeartbeat = startHeartbeat(journal, migration.name, claimId);
       try {
         await migration.up({ service, logger, name: migration.name });
-        await journal.markApplied(migration.name);
+        await journal.markApplied(migration.name, claimId);
       } catch (err) {
-        await journal.removeRunning(migration.name);
+        await journal.removeRunning(migration.name, claimId);
         throw err;
       } finally {
         stopHeartbeat();
@@ -125,9 +129,19 @@ export const createMongoMigrationRunner = (
 
     for (const file of appliedFiles) {
       const migration = await loadMigration(migrationDir, file);
+      const claimId = await journal.claimRollback(migration.name, basename(file), leaseMs);
+      if (claimId === null) {
+        logger.info({ name: migration.name }, 'migration rollback already claimed, skipping');
+        continue;
+      }
+      const stopHeartbeat = startHeartbeat(journal, migration.name, claimId);
       logger.info({ name: migration.name }, 'running migration down');
-      await migration.down({ service, logger, name: migration.name });
-      await journal.unrecord(migration.name);
+      try {
+        await migration.down({ service, logger, name: migration.name });
+        await journal.unrecord(migration.name, claimId);
+      } finally {
+        stopHeartbeat();
+      }
       logger.info({ name: migration.name }, 'migration rolled back');
       if (targetName !== undefined && migration.name === targetName) break;
     }

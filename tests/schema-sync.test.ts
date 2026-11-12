@@ -46,6 +46,19 @@ maybe('syncIndexes', () => {
     expect(indexes.some((i) => i.name === 'sku_1')).toBe(true);
   });
 
+  test('replaces a same-key index when its options differ', async () => {
+    const { db } = ctx;
+    await db.client.collection('products').dropIndex('sku_1');
+    await db.client.collection('products').createIndex({ sku: 1 }, { unique: false });
+    const res = await db.syncIndexes('products');
+    expect(res.dropped).toContain('sku_1');
+    expect(res.created).toContain('sku_1');
+    const index = (await db.client.collection('products').indexes()).find(
+      (i) => i.name === 'sku_1',
+    );
+    expect(index?.unique).toBe(true);
+  });
+
   test('drops an undeclared index', async () => {
     const { db } = ctx;
     await db.client.collection('products').createIndex({ name: 1 }); // not declared

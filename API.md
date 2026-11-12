@@ -51,7 +51,7 @@ validator, and the query builder's field typing from one definition.
 | --- | --- | --- |
 | `AppError` | V | Base error: `(code, message, statusCode, extra?, expose?)` + `toJSON()` (logs) and `toClientPayload()` (clients). |
 | `DomainError` | V | Expected business violation; `statusCode` refined per code: `NOT_FOUND` → 404, `DUPLICATE_KEY`/`VERSION_CONFLICT`/`COLLECTION_EXISTS`/`SCHEMA_DRIFT` → 409, `VALIDATION_FAILED` → 422 (else 400). |
-| `InfraError` | V | Infrastructure failure; `MONGO_TIMEOUT` → 504 (else 500): `MONGO_QUERY_ERROR`, … |
+| `InfraError` | V | Infrastructure failure; `MONGO_TIMEOUT` → 504 (else 500): `MONGO_QUERY_ERROR`, `TRANSACTIONS_UNSUPPORTED`, … |
 | `BadRequest` | V | Malformed caller input (400, code `BAD_REQUEST`). |
 | `isAppError` / `isDomainError` / `isInfraError` | V | Type guards. |
 | `mapMongoDriverError` | V | Map a raw driver error → `AppError` (11000/112/50/121/bulk). |
@@ -126,7 +126,8 @@ Backend-neutral, pure functions (no DB knowledge).
 | Export | Kind | Purpose |
 | --- | --- | --- |
 | `createMongoService` | V | Build the service (managers, health, connections). |
-| `MongoService`, `MongoServiceConfig` | T | Service handle + config (`defaultDb`, `migrationDir`, `appName`, `logger`, `wrapMongoErrors`, `cache`, `cacheWatch`, `dedupeReads`, `perf`, `drift`). |
+| `MongoService`, `MongoServiceConfig` | T | Service handle + config (`defaultDb`, `migrationDir`, `appName`, `logger`, `wrapMongoErrors`, `cache`, `cacheWatch`, `dedupeReads`, `perf`, `validateWrites`, `allowNonTransactionalFallback`, `drift`). |
+| `TransactionOptions` | T | Mongo transaction options plus explicit `allowNonTransactionalFallback` (default false). |
 | `CacheInvalidator` / `CacheInvalidationRef` | V/T | `cacheWatch: true` opens `$changeStream` watchers so external writes invalidate the shared cache (replica sets only). |
 | `CollectionManager` | T | Per-DB manager: CRUD + pagination + aggregation + schema (`createSchema`/`updateSchema`/`syncIndexes`) + transactions + `populate` + `client`. |
 | `HealthReport`, `DbHealthResult` | T | `service.health()` output. |
@@ -169,8 +170,8 @@ Related types: `FindQueryOptions` (adds `select` projection), `InsertInput`,
 | --- | --- | --- |
 | `PaginationConfig`, `CursorPaginationConfig`, `CursorPage` | T | Config/result for `paginateFlexible` / `paginateCursor`. |
 
-- `paginateFlexible` — `$facet` (count + data in one round trip, has totals).
-- `paginateCursor` — keyset (O(log n), opaque `nextCursor`, no totals).
+- `paginateFlexible` — `$facet` (count + data in one round trip, has totals); `maxOffset` defaults to 10,000.
+- `paginateCursor` — keyset (O(log n), opaque `nextCursor`, no totals); the final sort key must be `_id` or `uniqueTiebreaker`. BSON values and dotted paths are supported.
 
 ### Aggregation
 
@@ -208,9 +209,9 @@ Manager ops: `aggregate`, `pipeline`, `groupBy`, `textSearch`, `dateRangeAnalysi
 | `canonicalKey` | V | Canonical value key (ObjectId/Date-safe) — useful as `DataLoader` `keyOf`. |
 | `belongsTo` / `hasMany` / `manyToMany` | V | Relation helpers (schema-validated, typed `as` fields). |
 | `RelationDef`, `RelationDefBase`, `BelongsToRelation`, `HasManyRelation`, `ManyToManyRelation`, `ValidRelation`, `JoinedFields` | T | Relation types. |
-| `PopulateOptions` | T | `{ maxBatchSize?, cache?, maxDocs? }` (maxDocs caps per-batch fetch, default 10 000). |
-| `QueryCache` / `QueryCacheOptions` / `QueryCacheStats` | V/T | LRU+TTL read cache with per-collection invalidation; `set(key, value, ttlMs?, collections?, versions?)` registers an entry under additional source collections (aggregation joins) and stores per-collection versions captured at read-start (write-after-invalidate guard — `get()` treats a version-mismatched entry as stale); `versionOf(collection)`; `clone?: boolean`; `stats()` reports hits/misses/evictions/… |
-| `cacheCollectionKey` | V | Compose a cache collection key namespaced by database (multi-DB isolation). |
+| `PopulateOptions` | T | `{ maxBatchSize?, cache?, queryCache?, maxDocs?, session?, maxTimeMS?, readPreference?, readConcern? }`; maxDocs throws on overflow instead of truncating. |
+| `QueryCache` / `QueryCacheOptions` / `QueryCacheStats` | V/T | LRU+TTL read cache with per-collection invalidation; `set(key, value, ttlMs?, collections?, versions?)` registers an entry under additional source collections (aggregation joins) and stores per-collection versions captured at read-start (write-after-invalidate guard — `get()` treats a version-mismatched entry as stale); `versionOf(collection)`; `clone` defaults to true and `ttlMs` to 30,000 (`0` explicitly disables expiry); `stats()` reports hits/misses/evictions/… |
+| `cacheCollectionKey` | V | Compose a cache key namespaced by deployment, database, and collection. |
 | `InFlight` | V | Concurrent identical-query coalescing. |
 | `SyncIndexesResult` | T | `{ created: string[]; dropped: string[] }` from `syncIndexes`. |
 | `HotCache`, `createHotCache` | V | Global opt-in read-through cache (replica change streams / standalone ticker). `invalidateIds(collection, ids)` purges only entries whose `idsOf`-extracted dependencies include those documents (no-extractor queries burst); `stats()` snapshots per-query `hits`/`misses`/`refreshes`/`loadErrors`/`sizeSkips`/`idDrops`/`evictions`. |
@@ -228,11 +229,11 @@ Manager ops: `aggregate`, `pipeline`, `groupBy`, `textSearch`, `dateRangeAnalysi
 
 | Export | Kind | Purpose |
 | --- | --- | --- |
-| `withGracefulMongoTransaction` / `MongoTransactionRunner` / `GracefulTransactionOptions` | V/T | Transaction-or-null fallback wrapper. |
+| `withGracefulMongoTransaction` / `MongoTransactionRunner` / `GracefulTransactionOptions` | V/T | Capability-aware transaction wrapper; non-atomic fallback requires `allowNonTransactionalFallback: true`. |
 | `probeMongoCapabilities` | V | Probe `hello` for replica support (timeout-guarded). |
 | `createMongoCapabilitiesStore` / `MongoCapabilities` / `MongoCapabilitiesStore` | V/T | Cached capability store. |
 
-The manager also exposes `transaction(fn(session|null), txnOptions?)` and `migrate(name, fn, filePath?)` (idempotent claim-based, transaction-safe).
+The manager also exposes `transaction(fn(session|null), txnOptions?)` and `migrate(name, fn, filePath?, options?)`. Both use owner-fenced claims; transactions fail on unsupported deployments unless fallback is explicitly enabled.
 
 ## Migrations
 
@@ -242,8 +243,9 @@ The manager also exposes `transaction(fn(session|null), txnOptions?)` and `migra
 | `MongoMigrationRunner`, `MongoMigrationRunnerOptions` | T | Runner interface: `up()`, `down(targetName?)`, `status()`, `create(name)`. Options: `migrationDir`, `logger`, `db` (which connected database the journal targets — set explicitly in multi-DB services), `leaseMs` (claim lease, default 120s, auto-renewed during long `up()`s). |
 | `MigrationContext`, `MigrationModule` | T | Migration signature (`{ up, down }`). |
 
-Journaling is claim-based: an atomic upsert claim (status `running` → `applied`)
-prevents concurrent double-run; stale `running` rows are re-run after 60 s.
+Journaling uses unique claim IDs and renewable leases for both `up` and `down`.
+A stale worker cannot renew, finish, or remove a successor's claim. File
+migrations are not automatically transactional and should be idempotent.
 
 ## Repository
 

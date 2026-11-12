@@ -22,6 +22,7 @@ error taxonomy, file-based migrations, and graceful transactions. Bun-first:
 |------|---------|
 | Install | `bun install` |
 | Tests | `bun test` (Mongo-gated suites auto-skip without a server) |
+| E2E | `bun run test:e2e` (public API; requires `MONGO_URL`) |
 | Coverage | `bun test --coverage` (CI floor: ≥ 85% lines) |
 | Typecheck | `bun run typecheck` (== `tsc --noEmit`; includes `tests/types.ts` compile-only assertions) |
 | Lint / format | `bun run lint` / `bun run lint:fix` / `bun run format` (Biome) |
@@ -36,7 +37,7 @@ error taxonomy, file-based migrations, and graceful transactions. Bun-first:
 
 ```
 src/
-  index.ts                  public barrel — 216 named exports (values + types)
+  index.ts                  public barrel — 218 named exports (values + types)
   toolkit.ts                createMongoToolkit = service + migrations
   types.ts                  DBClientDefinition / CollectionDefinition / Extract*
   schema/                   ★ typed DSL → $jsonSchema + InferDoc + validateDoc
@@ -52,7 +53,7 @@ src/
   errors/                   AppError taxonomy + driver mapping + HTTP status
   hooks/                    HOOK_NAMES + runHooks
   shared/ + utils/          pure helpers (pagination, keyset, lru, memoize, …)
-tests/                      bun:test suites (29) + helpers.ts + types.ts + fixtures/
+tests/                      bun:test suites (36) + e2e/ + helpers.ts + types.ts + fixtures/
 scripts/                    check-api.ts, release.ts (maintainer tooling)
 docs/ai/LOCAL_DEV.md        bun link workflow with the core projects
 ```

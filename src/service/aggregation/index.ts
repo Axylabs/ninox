@@ -43,7 +43,13 @@ export const makeAggregationOps = <
   type C = ExtractCollectionNames<TClients, TDb>;
 
   const resolve = opts.resolveCollectionName;
-  const deps = makeOpDeps<C>(logger, dbLabel, resolve, opts.wrapMongoErrors === true);
+  const deps = makeOpDeps<C>(
+    logger,
+    dbLabel,
+    resolve,
+    opts.wrapMongoErrors === true,
+    opts.debugQuery,
+  );
   const coll = (collection: C) => client.collection<Document>(resolve(String(collection)));
 
   const ctx: AggregationCtx<TClients, TDb> = {

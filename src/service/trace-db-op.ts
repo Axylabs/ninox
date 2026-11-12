@@ -34,11 +34,11 @@ export interface TraceDbOpOptions {
  * `debugQuery` itself is a zero-cost pass-through when no request trace is
  * active, so production ignex apps pay nothing either.
  */
-type DebugQuery = (
+export type DebugQuery = <T>(
   sql: string,
   params: unknown,
-  fn: () => unknown | Promise<unknown>,
-) => Promise<unknown>;
+  fn: () => T | Promise<T>,
+) => T | Promise<T>;
 
 let debugQueryCache: DebugQuery | null | undefined;
 

@@ -144,7 +144,7 @@ const run = async (): Promise<void> => {
   ]);
   console.log('deduped counts ->', deduped);
 
-  // 8) Graceful transaction (falls back to non-transactional on standalone).
+  // 8) Explicit non-transactional fallback for the standalone demo server.
   await withGracefulMongoTransaction(
     { transaction: users.transaction },
     async (session) => {
@@ -154,7 +154,7 @@ const run = async (): Promise<void> => {
         { ...(session != null ? { session } : {}) },
       );
     },
-    { capabilities: caps, urlHint: MONGO_URL },
+    { capabilities: caps, urlHint: MONGO_URL, allowNonTransactionalFallback: true },
   );
 
   const total = await users.countDocuments('orders', {});

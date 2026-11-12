@@ -146,9 +146,11 @@ export type {
   CacheInvalidationRef,
   CollectionManager,
   DbHealthResult,
+  DebugQuery,
   HealthReport,
   MongoService,
   MongoServiceConfig,
+  TransactionOptions,
 } from './service/index.ts';
 /* ------------------------------ service --------------------------------- */
 export { CacheInvalidator, createMongoService } from './service/index.ts';

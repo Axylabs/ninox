@@ -7,7 +7,7 @@
  * so this file proves both the positive (typed) and negative (rejected)
  * sides of the type system.
  */
-import { Decimal128, ObjectId } from "mongodb";
+import { Decimal128, Long, ObjectId } from "mongodb";
 import {
   belongsTo,
   createMongoService,
@@ -547,7 +547,7 @@ const _precise = async (): Promise<void> => {
   });
   type Precise = InferDoc<typeof preciseSchema>;
   const _d: Precise["d"] = 1.5;
-  const _l: Precise["l"] = 5;
+  const _l: Precise["l"] = Long.fromNumber(5);
   const _dec: Precise["dec"] = new Decimal128("9.99");
   const _meta: Precise["meta"] = { anything: true };
   void _d;

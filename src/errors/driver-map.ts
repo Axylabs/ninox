@@ -110,6 +110,12 @@ export const mapMongoDriverError = (error: unknown, ctx: ErrorContext = {}): unk
 
   const code = (error as { code?: unknown }).code;
   switch (code) {
+    case 20:
+      return new InfraError(
+        'TRANSACTIONS_UNSUPPORTED',
+        'MongoDB deployment does not support transactions; enable allowNonTransactionalFallback to run non-atomically',
+        context,
+      );
     case 112:
       return new DomainError('VERSION_CONFLICT', 'Document version conflict', context);
     case 50:

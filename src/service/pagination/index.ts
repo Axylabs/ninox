@@ -35,7 +35,13 @@ export const makePaginationOps = <
   type C = ExtractCollectionNames<TClients, TDb>;
 
   const resolve = opts.resolveCollectionName;
-  const deps = makeOpDeps<C>(logger, dbLabel, resolve, opts.wrapMongoErrors === true);
+  const deps = makeOpDeps<C>(
+    logger,
+    dbLabel,
+    resolve,
+    opts.wrapMongoErrors === true,
+    opts.debugQuery,
+  );
 
   const ctx: PaginationCtx<TClients, TDb> = {
     client,

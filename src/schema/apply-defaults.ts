@@ -15,15 +15,10 @@
  */
 
 import type { Document } from 'mongodb';
+import { cloneDeep } from '../utils/clone.ts';
 import type { ObjectField } from './types.ts';
 
-/** Deep-clone a default value; falls back to a shallow copy when
- * `structuredClone` is unavailable (very old runtimes). */
-const cloneDefault = (value: unknown): unknown => {
-  if (value === null || typeof value !== 'object') return value;
-  if (typeof structuredClone === 'function') return structuredClone(value);
-  return Array.isArray(value) ? [...value] : { ...(value as Record<string, unknown>) };
-};
+const cloneDefault = (value: unknown): unknown => cloneDeep(value);
 
 /**
  * Fill schema defaults into `doc` (in place). Only *absent* keys are written;

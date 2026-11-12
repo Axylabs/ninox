@@ -281,7 +281,7 @@ builder, and the MongoDB `$jsonSchema` validator + indexes installed by
 | field kind | `s.*` | inferred TS type |
 | --- | --- | --- |
 | string / int / number | `s.string()` / `s.integer()` / `s.number()` | `string` / `number` / `number` |
-| exact BSON kinds | `s.double()` / `s.long()` / `s.decimal()` | `number` / `number` / `Decimal128` |
+| exact BSON kinds | `s.double()` / `s.long()` / `s.decimal()` | `number` / `Long` / `Decimal128` |
 | other scalars | `s.boolean()` / `s.date()` / `s.objectId()` | `boolean` / `Date` / `ObjectId` |
 | enum | `s.enum(['a', 'b'] as const)` | `'a' \| 'b'` (string or numeric literals) |
 | array | `s.array(s.string())` | `string[]` |
@@ -293,8 +293,10 @@ builder, and the MongoDB `$jsonSchema` validator + indexes installed by
 Constraints mirror `$jsonSchema`: strings (`minLength` / `maxLength` / `pattern`),
 numbers (`minimum` / `maximum` / `multipleOf` / `exclusiveMinimum` /
 `exclusiveMaximum`), arrays (`minItems` / `maxItems` / `uniqueItems`), objects
-(`minProperties` / `maxProperties` / `additionalProperties`). `format` is
-accepted but a no-op (MongoDB rejects the `$jsonSchema` keyword).
+(`minProperties` / `maxProperties` / `additionalProperties`). String `format`
+is validated client-side for `email`, `uri`, `date-time`, `date`, `uuid`,
+`hostname`, `ipv4`, and `ipv6`; it is not sent to MongoDB because the server
+rejects that `$jsonSchema` keyword.
 
 ```ts
 const userSchema = s.object({
@@ -342,7 +344,10 @@ do {
 ```
 
 `paginateCursor` supports `after` (forward) and `before` (backward); a sort whose
-keys don't match the cursor's is rejected at runtime.
+keys don't match the cursor's is rejected at runtime. The final sort key must be
+`_id` or an explicitly named `uniqueTiebreaker` with a unique index. Dotted paths
+and BSON values are supported. Offset pagination rejects offsets above 10,000 by
+default (`maxOffset` overrides); use keyset pagination for deep traversal.
 
 ## Geospatial
 
@@ -423,6 +428,11 @@ await db.populate(products, [
 // orders[0].customer, orders[0].more, products[0].tags are all typed.
 ```
 
+Populate reads are fresh by default. Pass `session`, `maxTimeMS`, read concern,
+or read preference in the options. `maxDocs` is an optional safety cap that
+throws on overflow rather than silently truncating a relation; `queryCache:
+true` explicitly opts into the shared read cache.
+
 ## Repository layer
 
 `createRepository(manager, 'collection')` wraps a manager + collection into a
@@ -454,12 +464,14 @@ const users = defineCollection('users', userSchema, {
 
 ## Transactions & migrations
 
-- `db.transaction(async (session) => ...)` — graceful session transactions with a
-  capability probe; on standalone servers (no transactions) it falls back to
-  plain non-transactional execution with `session === null`.
+- `db.transaction(async (session) => ...)` throws on standalone servers by
+  default. To accept non-atomic execution explicitly, pass
+  `{ allowNonTransactionalFallback: true }`; the callback then receives `null`.
 - `createMongoMigrationRunner(service, { migrationDir })` — file-based migrations
-  (`NNN_name.ts`, each exporting `up` / `down`) with a claim-based idempotency
-  journal (`_migrations`), safe under concurrent runners.
+  (`NNN_name.ts`, each exporting `up` / `down`) with a lease- and owner-token-
+  fenced journal (`_migrations`), safe under concurrent runners and stale-worker
+  takeover. Migrations should remain idempotent: file migrations are not
+  automatically wrapped in a database transaction.
 
 ```ts
 const runner = createMongoMigrationRunner(service, { migrationDir: './migrations' });
@@ -501,8 +513,8 @@ reports current size plus lifetime `hits` / `misses` / `sets` / `deletes` /
 > ⚠️ **Cache invalidation is write-through only.** Every ninox write drops that
 > collection's cached reads, but reads are **not** invalidated by external
 > writers — other processes, the raw `client` escape hatch, or direct DB
-> writes. With the default `ttlMs: 0` those reads stay stale indefinitely, so
-> multi-writer deployments should set `cache: { ttlMs }`, disable the cache,
+> writes. The default `ttlMs: 30_000` bounds that staleness; `ttlMs: 0` is an
+> explicit unbounded-cache opt-in. Multi-writer deployments can disable the cache,
 > route latency-critical reads through the change-stream-aware
 > [`createHotCache()`](#hot-cache-high-throughput), or — on a replica set — opt
 > into `cacheWatch: true`:
@@ -786,16 +798,18 @@ you need the code → status mapping yourself.
 > (at-least-once); opt in per op with `retryWrites: true`. Reads always retry
 > transient errors.
 
-Schema validation is enforced **by MongoDB** — the DB `$jsonSchema` validator
-derived from your schema is installed with `createSchema`, and the DB rejects
-violating writes with `VALIDATION_FAILED`. `createSchema` is **idempotent and
+Schema validation is enforced **by ninox and MongoDB** — inserts and full
+replacements are validated client-side by default (`validateWrites: false` opts
+out), while the DB `$jsonSchema` validator remains the backstop for partial
+updates, raw writes, and other clients. Violations raise `VALIDATION_FAILED`. `createSchema` is **idempotent and
 self-reconciling**: it provisions a NEW collection, and when the collection
 already exists it upgrades the DB schema to match the current ORM schema
 (hot-swapping the validator via `collMod` only when it has drifted, and
 creating any newly-declared indexes) — so calling it on every boot keeps
 Mongo's schema in lockstep with your models as they change. `updateSchema`
-hot-swaps a validator explicitly (via `collMod`). ninox deliberately does
-**not** validate *incoming user input* at runtime (no client-side/zod layer).
+hot-swaps a validator explicitly (via `collMod`) and updates the manager's
+active schema. Client validation covers the DSL and raw `$jsonSchema` keywords;
+partial update operators are still enforced by the database.
 
 - **Strict by default** — `additionalProperties: false` is emitted unless a
   field opts out (`s.object({ ... }, { additionalProperties: true })`), so
@@ -898,6 +912,8 @@ createMongoService(clients, {
   cache: { maxSize: 1000, ttlMs: 30_000, clone: true }, // configure the default cache
   cacheWatch: true,           // change-stream invalidation of the cache (replica sets)
   drift: 'report',            // read-time schema-drift detection ('report'|'throw'|'off')
+  validateWrites: true,       // validate inserts/replacements before the DB call
+  allowNonTransactionalFallback: false, // throw instead of losing atomicity
   dedupeReads: true,
   perf: true,                 // master switch for cache + dedup
 });
@@ -908,8 +924,8 @@ createMongoService(clients, {
 - `service.health()` — ping every connected DB and report `{ ok, latencyMs, dbs }`.
 - **Multi-DB services** — define several clients in one service; each gets its own
   typed manager (`service.db.primaryClient`, `service.db.auditClient`, …), one
-  connection pool per URL, and **cache/dedup keys are namespaced by database** so
-  same-named collections in different databases never collide.
+  connection pool per URL, and **cache/dedup keys are namespaced by deployment,
+  database, and collection** so same-named collections never collide.
 - `watchCollection` / repository `.watch()` — caller-owned change streams.
 - `eachDb(fn)` — run a function over every connected manager.
 
@@ -1000,8 +1016,8 @@ bun run bench     # → bench/results/summary.json
 
 **Multi-DB cache isolation.** A single service can define several DB clients; the
 query cache and in-flight dedup are shared across them, and their keys are
-namespaced by **database** — so same-named physical collections in different
-databases can never share (or coalesce) entries. No action needed; it's handled.
+namespaced by **deployment and database** — same-named physical collections in
+different databases or clusters can never share (or coalesce) entries.
 
 **Standalone HotCache freshness is opt-in per query.** In standalone mode the
 ticker only refreshes queries that set `refreshIntervalMs`. A query with neither
@@ -1037,8 +1053,15 @@ the cache-effectiveness signals to watch in production.
 ## Tests
 
 ```bash
-bun test          # unit + integration (integration skips when no Mongo is reachable)
+bun test             # unit + integration (Mongo suites skip when no server is reachable)
+bun run test:e2e     # public-API workflows; fails unless MONGO_URL is reachable
 ```
+
+The e2e suite exercises real MongoDB schema validation, CRUD/repository flows,
+relations, aggregation, both pagination strategies, cache consistency,
+migrations, multi-DB behavior, and health checks. On a replica set it also
+verifies transaction commit/rollback; on standalone it verifies the explicit
+non-transactional fallback. Set `MONGO_URL` to select the server.
 
 ## Development
 
@@ -1058,7 +1081,8 @@ npm pack --dry-run    # inspect the published tarball contents
 The `files` allowlist ships `dist/`, `LICENSE`, and `README.md` — no `src/`,
 tests, or examples. CI enforces typecheck, lint, dependency audit, coverage
 (≥ 85%), the full example suite, a replica-set job for the HotCache
-change-stream tests, and an `npm pack` → fresh Node consumer smoke test.
+change-stream tests, e2e compatibility jobs for MongoDB 4.4/5/6/7/8, and an
+`npm pack` → fresh Node consumer that runs real CRUD and pagination.
 
 Release notes are kept in [`CHANGELOG.md`](./CHANGELOG.md). The publish gate
 (`prepublishOnly`) runs typecheck + lint + build.

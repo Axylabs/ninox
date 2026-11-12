@@ -71,8 +71,16 @@ export const makeWriteOps = <
   type DocOf2<X extends C> = DocOf<TClients, TDb, X>;
 
   const { opts } = ctx;
-  const { coll, toDriverFilter, writeRun, invalidate, stampCreate, stampUpdate, stampReplace } =
-    ctx;
+  const {
+    coll,
+    toDriverFilter,
+    writeRun,
+    invalidate,
+    stampCreate,
+    stampUpdate,
+    stampReplace,
+    validateWrite,
+  } = ctx;
   const { getOne } = readOps;
 
   /**
@@ -111,6 +119,7 @@ export const makeWriteOps = <
       doc: doc as Document,
     });
     stampCreate(collection, doc as Document);
+    validateWrite(collection, doc as Document);
     const result = await writeRun(
       collection,
       'mongo.insertOne',
@@ -151,7 +160,10 @@ export const makeWriteOps = <
       collection: String(collection),
       docs: docs as unknown as Document[],
     });
-    for (const d of docs) stampCreate(collection, d as Document);
+    for (const d of docs) {
+      stampCreate(collection, d as Document);
+      validateWrite(collection, d as Document);
+    }
     const result = await writeRun(
       collection,
       'mongo.insertMany',
@@ -305,6 +317,7 @@ export const makeWriteOps = <
       filter: filter as Filter<Document>,
     });
     const effective = stampReplace(collection, replacement as Document) as DocOf2<X>;
+    validateWrite(collection, effective as Document, false);
     const result = await writeRun(
       collection,
       'mongo.findOneAndReplace',
@@ -347,6 +360,8 @@ export const makeWriteOps = <
       collection: String(collection),
       filter: filter as Filter<Document>,
     });
+    const effective = stampReplace(collection, replacement as Document);
+    validateWrite(collection, effective, false);
     const result = await writeRun(
       collection,
       'mongo.replaceOne',
@@ -357,9 +372,7 @@ export const makeWriteOps = <
         };
         return coll(collection).replaceOne(
           toDriverFilter(filter),
-          stampReplace(collection, replacement as Document) as unknown as OptionalUnlessRequiredId<
-            DocOf2<X>
-          >,
+          effective as unknown as OptionalUnlessRequiredId<DocOf2<X>>,
           repOpts,
         );
       },

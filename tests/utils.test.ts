@@ -381,7 +381,8 @@ describe('stable hashing — non-plain-object values', () => {
     const a = { at: new Date('2026-01-01T00:00:00Z') };
     const b = { at: new Date('2026-01-02T00:00:00Z') };
     expect(stableHash(a)).not.toBe(stableHash(b));
-    expect(stableStringify(a)).toBe('{"at":"date:1767225600000"}');
+    expect(stableStringify(a)).toContain('date');
+    expect(stableStringify(a)).toContain('2026-01-01T00:00:00.000Z');
   });
 
   test('ObjectId vs string vs Date never collapse', async () => {
@@ -434,13 +435,13 @@ describe('omit-undefined (write payloads never serialize undefined as null)', ()
   });
 });
 
-describe('hash strength (dual-round digest)', () => {
+describe('hash strength (SHA-256 digest)', () => {
   test('deterministic and order-insensitive', () => {
     expect(stableHash({ a: 1, b: 2 })).toBe(stableHash({ b: 2, a: 1 }));
     expect(stableHash('x')).toBe(stableHash('x'));
   });
 
-  test('distinct inputs never share a digest (64-bit space)', () => {
+  test('distinct inputs never share a digest (256-bit space)', () => {
     // The old single-round djb2 collided on such pairs under churn; the
     // dual-round digest spreads across ~64 bits.
     const seen = new Set<string>();
@@ -454,6 +455,23 @@ describe('hash strength (dual-round digest)', () => {
   test('structurally different filters hash differently (boundary safety)', () => {
     expect(stableHash(['a|b', 'c'])).not.toBe(stableHash(['a', 'b|c']));
     expect(stableHash([[], 'x'])).not.toBe(stableHash([['x']]));
+  });
+
+  test('special numbers, nullish values, and BSON values cannot alias', () => {
+    expect(stableHash(undefined)).not.toBe(stableHash(null));
+    expect(stableHash(Number.NaN)).not.toBe(stableHash(null));
+    expect(stableHash(Infinity)).not.toBe(stableHash(null));
+    expect(stableHash(Decimal128.fromString('1.2'))).not.toBe(stableHash(1.2));
+    expect(stableHash(Long.fromString('9007199254740993'))).not.toBe(
+      stableHash('9007199254740993'),
+    );
+  });
+
+  test('cycles and unsupported values fail instead of producing ambiguous keys', () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(() => stableHash(cyclic)).toThrow(/cyclic/);
+    expect(() => stableHash(() => {})).toThrow(/unsupported function/);
   });
 });
 

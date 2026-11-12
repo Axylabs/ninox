@@ -26,12 +26,13 @@ export interface PaginationConfig {
   sort?: Record<string, 1 | -1>;
   /** Cap on the requested limit (default DEFAULT_MAX_LIMIT=1000). */
   maxLimit?: number;
+  /** Maximum offset before callers must switch to keyset pagination (default 10_000). */
+  maxOffset?: number;
   /**
    * Projection applied to the data facet (e.g. `{ _id: 1, updatedAt: 1 }`).
    *
-   * Enables lean list reads — only the projected fields cross the wire. When
-   * set, the schema-drift check is skipped for the page (projected docs
-   * intentionally lack the collection's full field set).
+   * Enables lean list reads — only the projected fields cross the wire. Drift
+   * checks ignore absent fields but still validate the returned values.
    */
   projection?: Document;
   /** Stages prepended to the data facet (e.g. extra $match). */
@@ -49,6 +50,8 @@ export interface CursorPaginationConfig {
    * exist on every document for deterministic ordering.
    */
   sort: Record<string, 1 | -1>;
+  /** Unique final sort field. Defaults to `_id`; custom fields must have a unique index. */
+  uniqueTiebreaker?: string;
   /** Opaque cursor from a previous `nextCursor` — fetch the page after it. */
   after?: string;
   /** Opaque cursor — fetch the page before it (backward navigation). */
@@ -74,7 +77,9 @@ export type PaginationDocOf<
 
 export interface PaginationOpsOptions {
   resolveCollectionName: (logical: string) => string;
+  cacheNamespace?: string;
   wrapMongoErrors?: boolean;
+  debugQuery?: import('../trace-db-op.ts').DebugQuery | null;
   /** Service-level schema-drift policy for reads (default `'report'`). */
   drift?: DriftMode;
   /** Resolve the declared schema for a logical collection (drift detection). */

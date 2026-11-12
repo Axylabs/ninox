@@ -19,6 +19,17 @@
  */
 import type { MongoJsonSchema } from './json-schema.ts';
 
+export const SUPPORTED_STRING_FORMATS = new Set([
+  'email',
+  'uri',
+  'date-time',
+  'date',
+  'uuid',
+  'hostname',
+  'ipv4',
+  'ipv6',
+]);
+
 export interface FieldFlags {
   optional: boolean;
   hasDefault: boolean;
@@ -70,7 +81,7 @@ export interface DoubleField extends FieldMeta {
   exclusiveMaximum?: boolean;
 }
 
-/** Strict BSON `long` (int64) field — inferred as `number` (precision caveat). */
+/** BSON `long` (int64) field — inferred as the driver's lossless `Long` type. */
 export interface LongField extends FieldMeta {
   kind: 'long';
   minimum?: number;
@@ -229,6 +240,11 @@ export const s = {
   string(
     opts: { format?: string; minLength?: number; maxLength?: number; pattern?: string } = {},
   ): Chainable<StringField> {
+    if (opts.format !== undefined && !SUPPORTED_STRING_FORMATS.has(opts.format)) {
+      throw new Error(
+        `Unsupported string format "${opts.format}"; supported: ${[...SUPPORTED_STRING_FORMATS].join(', ')}`,
+      );
+    }
     return chain({ kind: 'string', ...BASE, ...opts });
   },
   /** 32-bit integer field with optional bounds (min/max, exclusive, multipleOf). */

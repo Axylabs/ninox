@@ -1,4 +1,4 @@
-import type { Decimal128, ObjectId } from 'mongodb';
+import type { Decimal128, Long, ObjectId } from 'mongodb';
 import type { GeoPoint } from '../shared/types.ts';
 import type { ObjectField, SchemaType } from './types.ts';
 
@@ -22,7 +22,7 @@ export type InferField<T extends SchemaType> = T extends { kind: 'string' }
           : T extends { kind: 'double' }
             ? number
             : T extends { kind: 'long' }
-              ? number
+              ? Long
               : T extends { kind: 'decimal' }
                 ? Decimal128
                 : T extends { kind: 'geoPoint' }

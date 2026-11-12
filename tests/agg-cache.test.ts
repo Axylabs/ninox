@@ -15,7 +15,10 @@
  * without Mongo at the top of the file.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { InFlight } from '../src/cache/in-flight.ts';
+import { cacheCollectionKey, QueryCache } from '../src/cache/query-cache.ts';
 import { probeMongoCapabilities } from '../src/capabilities.ts';
+import { createCachedAggregate } from '../src/service/aggregation/cached-read.ts';
 import { collectAggSources, isCacheablePipeline } from '../src/service/aggregation/helpers.ts';
 import type { Customer, Order } from './fixtures/enterprise.ts';
 import {
@@ -82,6 +85,38 @@ describe('aggregation cache helpers', () => {
     expect(isCacheablePipeline([{ $merge: { into: 'backup' } }])).toBe(false);
     // Non-determinism nested inside a $facet branch is caught too.
     expect(isCacheablePipeline([{ $facet: { a: [{ $sample: { size: 1 } }] } }])).toBe(false);
+  });
+
+  test('a joined-source invalidation starts a fresh read instead of joining stale in-flight work', async () => {
+    const cache = new QueryCache();
+    const pending: Array<(value: string) => void> = [];
+    const aggregate = createCachedAggregate({
+      client: { databaseName: 'app' } as never,
+      deps: {
+        trace: async (_meta: unknown, fn: () => unknown) => fn(),
+        meta: (_collection: string, op: string) => ({ op }),
+      } as never,
+      opts: { cache, dedupeReads: true, inFlight: new InFlight(), cacheNamespace: 'cluster' },
+      resolve: (name) => name,
+    });
+    const input = {
+      collection: 'orders',
+      opName: 'join',
+      pipeline: [{ $lookup: { from: 'customers' } }],
+      execute: async () => new Promise<string>((resolve) => pending.push(resolve)),
+    };
+
+    const first = aggregate(input);
+    await Promise.resolve();
+    expect(pending).toHaveLength(1);
+    cache.invalidateByCollection(cacheCollectionKey('app', 'customers', 'cluster'));
+    const second = aggregate(input);
+    await Promise.resolve();
+    expect(pending).toHaveLength(2);
+    pending[0]!('stale');
+    pending[1]!('fresh');
+    expect(await first).toBe('stale');
+    expect(await second).toBe('fresh');
   });
 });
 

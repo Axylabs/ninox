@@ -6,7 +6,31 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Optional wire-level Mongo command monitoring and an injectable host tracer.**
+  Client definitions accept `monitorCommands` (driver command events must be
+  enabled before pools open), the toolkit takes a `debugQuery` hook for logical
+  `db` spans, `traceDbOp` accepts the same hook per call via `options`, and
+  managers expose the underlying `mongoClient` so hosts can instrument the
+  driver directly (e.g. `@ignex/core/debug`'s `instrumentMongoClient`). The
+  `DebugQuery` type mirrors `@ignex/core`'s exact signature — it may return the
+  operation's result synchronously when no request trace is active.
+
 ### Changed
+
+- **Safety-first runtime contracts.** Transactions now require explicit
+  `allowNonTransactionalFallback` on unsupported deployments; `s.long()` infers
+  the lossless driver `Long` type; query caches clone by default and use a
+  30-second TTL unless `ttlMs: 0` is explicitly selected. Cache/dedup identity
+  includes deployment, database, and collection, and query hashes use canonical
+  BSON-aware serialization with SHA-256.
+- **Stronger schema and query behavior.** Inserts/replacements are validated
+  client-side by default, string formats and raw JSON-schema drift are checked,
+  keyset pagination enforces a unique final sort key and supports BSON/dotted
+  values, deep offset scans have a configurable guard, and relation overflow
+  throws instead of truncating. Schema/index reconciliation no longer drops a
+  collection after provisioning failures.
 
 - **Client payloads fail closed (5xx never quotes internals).** `serializeError`
   and the new `AppError.toClientPayload()` mask a 5xx `message` with the

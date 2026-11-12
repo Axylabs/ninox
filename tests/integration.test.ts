@@ -178,7 +178,7 @@ maybe('integration (real MongoDB)', () => {
           { ...(session != null ? { session } : {}) },
         );
       },
-      { capabilities: caps, urlHint: MONGO_URL },
+      { capabilities: caps, urlHint: MONGO_URL, allowNonTransactionalFallback: true },
     );
     const total = await db.countDocuments('orders', {});
     expect(total).toBe(3);

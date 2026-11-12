@@ -3,7 +3,7 @@ import type {
   CollationOptions,
   Document,
   Hint,
-  ReadConcern,
+  ReadConcernLike,
   ReadPreferenceLike,
   WriteConcern,
 } from 'mongodb';
@@ -48,14 +48,14 @@ export interface QueryOptions {
    * Per-op schema-drift policy override for reads (see `MongoServiceConfig.drift`).
    * `true` → `'throw'`, `false` → `'off'`, or an explicit `DriftMode` string.
    * Unset inherits the service-level default (`'report'`). Only checked when a
-   * document is fetched from the DB (cache-miss); projected/partial reads are
-   * skipped.
+   * document is fetched from the DB (cache-miss); projections ignore absent
+   * required fields but still validate returned values.
    */
   drift?: DriftMode | boolean;
   /** Driver-level options forwarded untouched to the underlying call. */
   collation?: CollationOptions;
   readPreference?: ReadPreferenceLike;
-  readConcern?: ReadConcern;
+  readConcern?: ReadConcernLike;
   writeConcern?: WriteConcern;
   comment?: string | Document;
   let?: Document;

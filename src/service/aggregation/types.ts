@@ -68,7 +68,9 @@ export type AggregationDocOf<
 
 export interface AggregationOpsOptions {
   resolveCollectionName: (logical: string) => string;
+  cacheNamespace?: string;
   wrapMongoErrors?: boolean;
+  debugQuery?: import('../trace-db-op.ts').DebugQuery | null;
   /** Shared read cache (`undefined` = caching disabled). */
   cache?: QueryCache;
   /** Service default for in-flight read dedup. */

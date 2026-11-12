@@ -1,71 +1,97 @@
-/**
- * Deterministic hashing utilities used for cache keys / in-flight dedup keys.
- * `stableStringify` produces an order-insensitive serialization so two logically
- * identical filters yield the same hash regardless of key insertion order.
- */
+import { createHash } from 'node:crypto';
+import { BSON } from 'mongodb';
 
-type Primitive = string | number | boolean | bigint | null | undefined;
+const { EJSON } = BSON;
 
-const isPlainObject = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' &&
-  v !== null &&
-  !Array.isArray(v) &&
-  !(v instanceof Date) &&
-  !(v instanceof RegExp) &&
-  // Mongo driver ObjectId (and other BSON values with a toHexString marker)
-  // must fall through to `toPrimitive` — treating them as plain objects
-  // would serialize every ObjectId as `{}` and collapse distinct values.
-  typeof (v as { toHexString?: unknown }).toHexString !== 'function';
+type Canonical = null | string | number | boolean | Canonical[] | { [key: string]: Canonical };
 
-const toPrimitive = (v: unknown): Primitive => {
-  if (v === undefined || v === null) return null;
-  if (typeof v === 'bigint') return v.toString();
-  if (v instanceof Date) return `date:${v.getTime()}`;
-  if (typeof v === 'object') {
-    // Mongo driver ObjectId has toHexString(); RegExp serializes as a string.
-    const anyV = v as { toHexString?: () => string; source?: string; flags?: string };
-    if (typeof anyV.toHexString === 'function') return `oid:${anyV.toHexString()}`;
-    if (anyV instanceof RegExp) return `re:${anyV.source}/${anyV.flags}`;
-  }
-  return v as Primitive;
+const bsonTypeOf = (value: object): string | undefined => {
+  const type = (value as { _bsontype?: unknown })._bsontype;
+  return typeof type === 'string' ? type : undefined;
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (value === null || typeof value !== 'object') return false;
+  const prototype = Object.getPrototypeOf(value) as object | null;
+  return (prototype === Object.prototype || prototype === null) && bsonTypeOf(value) === undefined;
 };
 
 /**
- * Stable stringify: recursively sorts object keys, coerces Date/ObjectId/RegExp
- * into primitive markers. Result is deterministic for a given logical value.
+ * Canonical, type-preserving serialization. Every value carries a type tag so
+ * user objects/strings cannot impersonate Date, ObjectId, RegExp, undefined, or
+ * other special values. BSON wrappers are encoded through the driver's EJSON
+ * implementation, including values from a second copy of the driver.
  */
 export const stableStringify = (value: unknown): string => {
-  const visit = (v: unknown): Primitive | Record<string, unknown> | unknown[] => {
-    if (Array.isArray(v)) return v.map(visit);
-    if (isPlainObject(v)) {
-      const out: Record<string, unknown> = {};
-      for (const key of Object.keys(v).sort()) out[key] = visit(v[key]);
-      return out;
+  const ancestors = new WeakSet<object>();
+  const visit = (input: unknown): Canonical => {
+    if (input === null) return { t: 'null' };
+    if (input === undefined) return { t: 'undefined' };
+    switch (typeof input) {
+      case 'string':
+      case 'boolean':
+        return { t: typeof input, v: input };
+      case 'number':
+        if (Number.isNaN(input)) return { t: 'number', v: 'NaN' };
+        if (input === Infinity) return { t: 'number', v: 'Infinity' };
+        if (input === -Infinity) return { t: 'number', v: '-Infinity' };
+        if (Object.is(input, -0)) return { t: 'number', v: '-0' };
+        return { t: 'number', v: input };
+      case 'bigint':
+        return { t: 'bigint', v: input.toString() };
+      case 'symbol':
+      case 'function':
+        throw new TypeError(`stableStringify: unsupported ${typeof input} value`);
+      default:
+        break;
     }
-    return toPrimitive(v);
+
+    const object = input as object;
+    if (ancestors.has(object)) throw new TypeError('stableStringify: cyclic value');
+    ancestors.add(object);
+    try {
+      if (input instanceof Date) {
+        return { t: 'date', v: Number.isNaN(input.getTime()) ? 'Invalid' : input.toISOString() };
+      }
+      if (input instanceof RegExp) return { t: 'regexp', v: `re:${input.source}/${input.flags}` };
+      const bsonType = bsonTypeOf(object);
+      if (bsonType !== undefined) {
+        return { t: 'bson', kind: bsonType, v: EJSON.stringify(input, { relaxed: false }) };
+      }
+      if (Array.isArray(input)) return { t: 'array', v: input.map(visit) };
+      if (input instanceof Map) {
+        return {
+          t: 'map',
+          v: [...input.entries()].map(([key, entry]) => [visit(key), visit(entry)]),
+        };
+      }
+      if (input instanceof Set) return { t: 'set', v: [...input].map(visit) };
+      if (Buffer.isBuffer(input)) return { t: 'buffer', v: input.toString('base64') };
+      if (ArrayBuffer.isView(input)) {
+        return {
+          t: 'bytes',
+          kind: input.constructor.name,
+          v: Buffer.from(input.buffer, input.byteOffset, input.byteLength).toString('base64'),
+        };
+      }
+      if (input instanceof ArrayBuffer) {
+        return { t: 'arraybuffer', v: Buffer.from(input).toString('base64') };
+      }
+      if (isPlainObject(input)) {
+        const out: Record<string, Canonical> = {};
+        for (const key of Object.keys(input).sort()) out[key] = visit(input[key]);
+        return { t: 'object', v: out };
+      }
+      throw new TypeError(`stableStringify: unsupported object ${input.constructor.name}`);
+    } finally {
+      ancestors.delete(object);
+    }
   };
   return JSON.stringify(visit(value));
 };
 
-/**
- * Dual-round 32-bit digest → ~64 bits of collision resistance, base-36.
- * Round 1 is djb2; round 2 mixes FNV-1a over the same input so two distinct
- * strings colliding in one round almost never collide in both. Cache keys
- * store ONLY this digest, so collision resistance matters: a hit must never
- * be able to serve another query's rows.
- */
-export const hashString = (input: string): string => {
-  let h1 = 5381;
-  let h2 = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    const c = input.charCodeAt(i);
-    h1 = ((h1 << 5) + h1 + c) | 0;
-    h2 = ((h2 ^ c) * 0x01000193) | 0;
-    // Extra diffusion so low-entropy inputs still spread across rounds.
-    h2 = (h2 << 3) | (h2 >>> 29);
-  }
-  return `${(h1 >>> 0).toString(36)}${(h2 >>> 0).toString(36)}`;
-};
+/** SHA-256 digest of the canonical input, safe to use as a complete cache key. */
+export const hashString = (input: string): string =>
+  createHash('sha256').update(input, 'utf8').digest('base64url');
 
-/** Convenience: hash any value through a stable stringification. */
 export const stableHash = (value: unknown): string => hashString(stableStringify(value));

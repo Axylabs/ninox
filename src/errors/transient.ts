@@ -71,7 +71,8 @@ export const isMongoDuplicateKeyError = (error: unknown): boolean => {
  */
 export const isTransactionUnsupportedError = (error: unknown): boolean => {
   const code = (error as { code?: unknown } | null)?.code;
-  if (code === 20) return true; // IllegalOperation — "Transaction numbers are only allowed..."
+  // IllegalOperation or the already-mapped unsupported-transaction error.
+  if (code === 20 || code === 'TRANSACTIONS_UNSUPPORTED') return true;
   const message = error instanceof Error ? error.message : '';
   return (
     /Transaction numbers are only allowed/i.test(message) ||

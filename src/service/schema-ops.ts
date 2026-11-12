@@ -1,6 +1,7 @@
 import type { CreateCollectionOptions, Db, Document } from 'mongodb';
 import { type ObjectField, toMongoValidator } from '../schema/index.ts';
 import type { IndexSpec } from '../types.ts';
+import { stableStringify } from '../utils/hash.ts';
 import type { LoggerLike } from '../utils/logger.ts';
 
 export interface CollectionRegistryEntry {
@@ -26,18 +27,35 @@ export interface SyncIndexesResult {
  * server-reported index documents carry extra fields (`v`, `ns`, …) that must
  * not leak into the comparison.
  */
-interface IndexOptionLike {
-  unique?: unknown;
-  sparse?: unknown;
-  expireAfterSeconds?: unknown;
-}
+type IndexOptionLike = Document;
 
-const optionSignature = (o?: IndexOptionLike): string =>
-  JSON.stringify([
-    Boolean(o?.unique),
-    Boolean(o?.sparse),
-    typeof o?.expireAfterSeconds === 'number' ? o.expireAfterSeconds : null,
-  ]);
+const optionSignature = (options?: IndexOptionLike): string => {
+  const normalized: Document = {
+    unique: Boolean(options?.unique),
+    sparse: Boolean(options?.sparse),
+    hidden: Boolean(options?.hidden),
+    expireAfterSeconds:
+      typeof options?.expireAfterSeconds === 'number' ? options.expireAfterSeconds : null,
+  };
+  for (const key of [
+    'partialFilterExpression',
+    'collation',
+    'wildcardProjection',
+    'weights',
+    'default_language',
+    'language_override',
+    'textIndexVersion',
+    '2dsphereIndexVersion',
+    'bits',
+    'min',
+    'max',
+    'bucketSize',
+    'storageEngine',
+  ]) {
+    if (options?.[key] !== undefined) normalized[key] = options[key];
+  }
+  return stableStringify(normalized);
+};
 
 const indexKeyOf = (key: Document, options?: IndexOptionLike): string =>
   `${JSON.stringify(Object.keys(key).map((k) => [k, key[k]]))}|${optionSignature(options)}`;
@@ -63,12 +81,14 @@ export interface SchemaOpsOptions {
  * `syncIndexes` reconciles index drift (create missing, drop undeclared).
  */
 export const makeSchemaOps = (client: Db, _logger: LoggerLike, opts: SchemaOpsOptions) => {
-  /** Read the `$jsonSchema` validator currently installed on a physical collection. */
-  const readCollectionValidator = async (physical: string): Promise<Document | undefined> => {
+  /** Read validation settings currently installed on a physical collection. */
+  const readCollectionValidation = async (
+    physical: string,
+  ): Promise<{ validator?: Document; validationLevel?: string; validationAction?: string }> => {
     const info = (await client.listCollections({ name: physical }).next()) as
-      | { options?: { validator?: Document } }
+      | { options?: Document }
       | undefined;
-    return info?.options?.validator;
+    return info?.options ?? {};
   };
 
   /**
@@ -94,7 +114,7 @@ export const makeSchemaOps = (client: Db, _logger: LoggerLike, opts: SchemaOpsOp
       try {
         await handle.createIndex(index.key as Document, index.options);
       } catch (err) {
-        if ((err as { code?: number })?.code === 85 /* IndexOptionsConflict */) {
+        if ([85, 86].includes((err as { code?: number })?.code ?? -1)) {
           // An index with the same name/key exists but with different options
           // (e.g. `unique` added). Can't be applied additively — tell the user
           // how to reconcile instead of failing the whole boot.
@@ -143,14 +163,9 @@ export const makeSchemaOps = (client: Db, _logger: LoggerLike, opts: SchemaOpsOp
     }
 
     if (created) {
-      try {
-        await ensureDeclaredIndexes(collection, physical, def);
-      } catch (err) {
-        // Roll back so a half-provisioned collection (validator, no indexes)
-        // isn't left behind on partial failure.
-        await client.dropCollection(physical).catch(() => {});
-        throw err;
-      }
+      // Never drop the collection on index failure: another process may already
+      // have written to it. The next createSchema call retries missing indexes.
+      await ensureDeclaredIndexes(collection, physical, def);
       return;
     }
 
@@ -158,9 +173,17 @@ export const makeSchemaOps = (client: Db, _logger: LoggerLike, opts: SchemaOpsOp
     // validator only when it actually drifted, and create any missing declared
     // indexes (never dropping anything — that is `syncIndexes`'s job).
     if (createOptions.validator) {
-      const current = await readCollectionValidator(physical);
-      if (JSON.stringify(current) !== JSON.stringify(createOptions.validator)) {
-        await client.command({ collMod: physical, validator: createOptions.validator });
+      const current = await readCollectionValidation(physical);
+      const collMod: Document = {};
+      if (stableStringify(current.validator) !== stableStringify(createOptions.validator)) {
+        collMod.validator = createOptions.validator;
+      }
+      for (const key of ['validationLevel', 'validationAction'] as const) {
+        const requested = createOptions[key];
+        if (requested !== undefined && current[key] !== requested) collMod[key] = requested;
+      }
+      if (Object.keys(collMod).length > 0) {
+        await client.command({ collMod: physical, ...collMod });
       }
     }
     await ensureDeclaredIndexes(collection, physical, def);
@@ -178,14 +201,14 @@ export const makeSchemaOps = (client: Db, _logger: LoggerLike, opts: SchemaOpsOp
       collMod: physical,
       validator: toMongoValidator(resolved),
     });
+    if (def) def.schema = resolved;
   };
 
   /**
    * Reconcile a collection's real indexes with the declared ones: create any
    * missing declared index and drop any undeclared one (`_id_` is always kept).
-   * Matching compares key ORDER and the `unique`/`sparse`/`expireAfterSeconds`
-   * options — an option-divergent same-key index is treated as missing (the
-   * declared version is created; the divergent one is dropped as undeclared).
+   * Matching compares key ORDER and all supported MongoDB index options.
+   * Option-divergent same-key/name indexes are replaced during this explicit op.
    * CAUTION: indexes on shared collections created by OTHER services are
    * treated as undeclared here — list them in the definition or don't share.
    * Expects the collection to already exist (`createSchema` first). Returns
@@ -203,33 +226,45 @@ export const makeSchemaOps = (client: Db, _logger: LoggerLike, opts: SchemaOpsOp
     const declaredByKey = new Map(
       declared.map((d) => [indexKeyOf(d.key as Document, d.options), d]),
     );
-    const created: string[] = [];
+    const keyPattern = (key: Document): string => JSON.stringify(Object.entries(key));
     const dropped: string[] = [];
-    for (const [key] of declaredByKey) {
-      if (!existingByKey.has(key)) {
-        await handle.createIndex(
-          (declaredByKey.get(key) as IndexSpec).key as Document,
-          (declaredByKey.get(key) as IndexSpec).options,
-        );
+    const droppedNames = new Set<string>();
+
+    // MongoDB cannot replace an index's options in place. Drop conflicting
+    // same-key/same-name indexes before creating the declared replacement.
+    for (const spec of declaredByKey.values()) {
+      const signature = indexKeyOf(spec.key as Document, spec.options);
+      if (existingByKey.has(signature)) continue;
+      for (const index of existing) {
+        const name = index.name as string;
+        if (droppedNames.has(name)) continue;
+        const sameName = spec.options?.name !== undefined && index.name === spec.options.name;
+        if (sameName || keyPattern(index.key as Document) === keyPattern(spec.key as Document)) {
+          await handle.dropIndex(name);
+          droppedNames.add(name);
+          dropped.push(name);
+        }
       }
+      await handle.createIndex(spec.key as Document, spec.options);
     }
-    // Resolve the real names of the indexes we just created (auto-named when no
-    // explicit `name` was given, e.g. `sku_1`) so the report is meaningful.
-    const after = (await handle.listIndexes().toArray()).filter((i) => i.name !== '_id_');
-    const afterByKey = new Map(
-      after.map((i) => [indexKeyOf(i.key as Document, i as IndexOptionLike), i.name as string]),
-    );
-    for (const [key, spec] of declaredByKey) {
-      if (!existingByKey.has(key)) {
-        created.push(spec.options?.name ?? afterByKey.get(key) ?? JSON.stringify(spec.key));
-      }
-    }
-    for (const [key, name] of existingByKey) {
-      if (!declaredByKey.has(key)) {
+
+    for (const [signature, name] of existingByKey) {
+      if (!declaredByKey.has(signature) && !droppedNames.has(name)) {
         await handle.dropIndex(name);
         dropped.push(name);
       }
     }
+
+    const after = (await handle.listIndexes().toArray()).filter((i) => i.name !== '_id_');
+    const afterByKey = new Map(
+      after.map((i) => [indexKeyOf(i.key as Document, i as IndexOptionLike), i.name as string]),
+    );
+    const created = [...declaredByKey]
+      .filter(([signature]) => !existingByKey.has(signature))
+      .map(
+        ([signature, spec]) =>
+          spec.options?.name ?? afterByKey.get(signature) ?? JSON.stringify(spec.key),
+      );
     return { created, dropped };
   };
 

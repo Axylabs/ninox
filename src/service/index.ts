@@ -10,6 +10,7 @@
 import { type MongoClient, ObjectId } from 'mongodb';
 import { InFlight } from '../cache/in-flight.ts';
 import type { DbClientsDefinition, ExtractDbNames } from '../types.ts';
+import { stableHash } from '../utils/hash.ts';
 import type { LoggerLike } from '../utils/logger.ts';
 import type { CacheInvalidationRef } from './cache-invalidation.ts';
 import { CacheInvalidator } from './cache-invalidation.ts';
@@ -91,6 +92,15 @@ export const createMongoService = <TClients extends DbClientsDefinition = DbClie
           dedupeReads,
           inFlight,
           wrapMongoErrors: runtime.wrapMongoErrors,
+          ...(configOverrides.debugQuery !== undefined
+            ? { debugQuery: configOverrides.debugQuery }
+            : {}),
+          ...(configOverrides.allowNonTransactionalFallback !== undefined
+            ? { allowNonTransactionalFallback: configOverrides.allowNonTransactionalFallback }
+            : {}),
+          ...(configOverrides.validateWrites !== undefined
+            ? { validateWrites: configOverrides.validateWrites }
+            : {}),
           ...(configOverrides.drift !== undefined ? { drift: configOverrides.drift } : {}),
           collectionRefs,
           db,
@@ -98,20 +108,35 @@ export const createMongoService = <TClients extends DbClientsDefinition = DbClie
         key as ExtractDbNames<TClients>,
         dbName,
         client,
+        stableHash(getDbUrl(key)),
       )) as (dbKey: string, dbName: string, client: MongoClient) => unknown,
     openedClients,
   );
-  // Open change-stream cache-invalidation watchers once connections are up, and
-  // tear them down before the pool closes.
-  const makeConnections = async (names?: (keyof TClients & string)[]): Promise<void> => {
-    await baseMakeConnections(names);
-    await cacheInvalidator?.start(collectionRefs);
+  let lifecycle = Promise.resolve();
+  const serializeLifecycle = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = lifecycle.then(operation, operation);
+    lifecycle = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
   };
-  const closeConnections = async (): Promise<void> => {
-    await cacheInvalidator?.stop();
-    collectionRefs.length = 0;
-    await closePool(openedClients);
-  };
+
+  const makeConnections = (names?: (keyof TClients & string)[]): Promise<void> =>
+    serializeLifecycle(async () => {
+      await baseMakeConnections(names);
+      await cacheInvalidator?.start(collectionRefs);
+    });
+  const closeConnections = (): Promise<void> =>
+    serializeLifecycle(async () => {
+      await cacheInvalidator?.stop();
+      collectionRefs.length = 0;
+      try {
+        await closePool(openedClients);
+      } finally {
+        for (const key of Object.keys(db)) delete db[key];
+      }
+    });
 
   const eachDb = async <T>(fn: (manager: unknown, dbKey: string) => Promise<T>): Promise<T[]> => {
     return Promise.all(Object.keys(db).map((key) => fn(db[key], key.replace(/Client$/, ''))));
@@ -140,3 +165,5 @@ export type { ResolvedServiceConfig } from './config.ts';
 export { type MongoServiceConfig, resolveCache } from './config.ts';
 export { createHealth, type DbHealthResult, type HealthReport } from './health.ts';
 export { type BuildManagerDeps, buildManager, type CollectionManager } from './manager.ts';
+export type { TransactionOptions } from './transaction.ts';
+export type { DebugQuery } from './trace-db-op.ts';

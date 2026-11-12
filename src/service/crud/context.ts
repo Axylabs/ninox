@@ -8,15 +8,23 @@
  * live in exactly one place instead of being duplicated per op. This module is
  * the dependency-injection seam of the CRUD layer.
  */
-import type { Collection, Db, Document, Filter, FindOptions } from 'mongodb';
+import {
+  type Collection,
+  type Db,
+  type Document,
+  type Filter,
+  type FindOptions,
+  ObjectId,
+} from 'mongodb';
 import type { InFlight } from '../../cache/in-flight.ts';
 import type { QueryCache } from '../../cache/query-cache.ts';
 import { cacheCollectionKey } from '../../cache/query-cache.ts';
+import { DomainError } from '../../errors/index.ts';
 import type { HooksRegistry } from '../../hooks/hooks.ts';
 import { withRetry } from '../../mongo-helpers.ts';
 import { applySchemaDefaults } from '../../schema/apply-defaults.ts';
 import type { ObjectField } from '../../schema/types.ts';
-import type { DriftMode } from '../../schema/validate-doc/index.ts';
+import { type DriftMode, validateDoc } from '../../schema/validate-doc/index.ts';
 import type { FilterInput } from '../../shared/filter-types.ts';
 import type {
   CollectionTimestamps,
@@ -75,13 +83,17 @@ export type TimestampsByCollection = Record<string, CollectionTimestamps | undef
 
 export interface CrudOpsOptions {
   resolveCollectionName: (logical: string) => string;
+  /** Stable, non-secret identity of the MongoDB deployment for shared caches. */
+  cacheNamespace?: string;
   wrapMongoErrors?: boolean;
+  debugQuery?: import('../trace-db-op.ts').DebugQuery | null;
   cache?: QueryCache;
   dedupeReads?: boolean;
   inFlight?: InFlight;
   hooks?: HooksRegistry;
   /** Auto-timestamp field names per collection (from the collection definition). */
   timestamps?: TimestampsByCollection;
+  validateWrites?: boolean;
   /** Service-level schema-drift policy for reads (default `'report'`). */
   drift?: DriftMode;
   /** Resolve the declared schema for a logical collection (drift detection). */
@@ -140,6 +152,7 @@ export interface CrudContext<
   ) => UpdateInput<DocOf<TClients, TDb, X>>;
   /** Return a full replacement with `updatedAt` stamped. */
   stampReplace: (collection: ColNames<TClients, TDb>, doc: Document) => Document;
+  validateWrite: (collection: ColNames<TClients, TDb>, doc: Document, generateId?: boolean) => void;
   /** Shared read pipeline: trace + retry, with opt-in cache and in-flight dedup. */
   read: <X extends ColNames<TClients, TDb>, T>(
     collection: X,
@@ -174,6 +187,7 @@ export const createCrudContext = <
     dbLabel,
     resolve,
     opts.wrapMongoErrors === true,
+    opts.debugQuery,
   );
   const coll = <X extends ColNames<TClients, TDb>>(name: X): Collection<DocOf<TClients, TDb, X>> =>
     client.collection<DocOf<TClients, TDb, X>>(resolve(String(name)));
@@ -202,7 +216,7 @@ export const createCrudContext = <
     // Namespaced by DB so a write to one database never (in)validates another's
     // same-named collection in the shared cache.
     opts.cache?.invalidateByCollection(
-      cacheCollectionKey(client.databaseName, resolve(String(collection))),
+      cacheCollectionKey(client.databaseName, resolve(String(collection)), opts.cacheNamespace),
     );
   };
 
@@ -251,6 +265,31 @@ export const createCrudContext = <
     return { ...doc, [ts.updatedAt]: new Date() };
   };
 
+  const validateWrite = (
+    collection: ColNames<TClients, TDb>,
+    doc: Document,
+    generateId = true,
+  ): void => {
+    if (opts.validateWrites === false) return;
+    const schema = opts.getSchema?.(String(collection));
+    if (!schema) return;
+    if (generateId && doc._id === undefined && schema.properties._id?.kind === 'objectId') {
+      doc._id = new ObjectId();
+    }
+    const issues = validateDoc(schema, doc).filter(
+      (issue) => generateId || issue.path !== '_id' || issue.code !== 'missing',
+    );
+    if (issues.length > 0) {
+      throw new DomainError('VALIDATION_FAILED', 'Document failed schema validation', {
+        db: client.databaseName,
+        collection: String(collection),
+        ...(doc._id !== undefined ? { documentId: doc._id } : {}),
+        fields: [...new Set(issues.map((issue) => issue.path))],
+        issues,
+      });
+    }
+  };
+
   /** Shared read pipeline: trace + retry, with opt-in cache and in-flight dedup. */
   const read = async <X extends ColNames<TClients, TDb>, T>(
     collection: X,
@@ -280,12 +319,12 @@ export const createCrudContext = <
     // Schema-drift detection on DB fetch only: check the freshly-fetched docs
     // BEFORE they are cached, so `'throw'` mode never caches/exposes a drifted
     // document and `'report'` mode logs once per fetch (cache hits are skipped).
-    // Projected reads return partial documents — validation would false-positive
-    // on the excluded required fields, so they are skipped.
+    // Projected reads ignore absent required fields but still validate values
+    // that were actually returned.
     const checkDrift = (value: T): void => {
       const mode = resolveDriftMode(resolved.sdk.drift, opts.drift);
       if (mode === 'off') return;
-      if ((resolved.driverOpts as { projection?: unknown }).projection !== undefined) return;
+      const partial = (resolved.driverOpts as { projection?: unknown }).projection !== undefined;
       const docs: Document[] =
         shape === 'many'
           ? (value as Document[])
@@ -298,6 +337,7 @@ export const createCrudContext = <
           db: dbLabel,
           drift: mode,
           ...(opts.getSchema !== undefined ? { getSchema: opts.getSchema } : {}),
+          partial,
         },
         String(collection),
         opName,
@@ -346,7 +386,10 @@ export const createCrudContext = <
     };
 
     const key = useCache
-      ? opts.cache!.key(cacheCollectionKey(client.databaseName, physical), getPayloadHash())
+      ? opts.cache!.key(
+          cacheCollectionKey(client.databaseName, physical, opts.cacheNamespace),
+          getPayloadHash(),
+        )
       : undefined;
 
     // Execution is created lazily so in-flight dedup can share ONE underlying
@@ -361,7 +404,7 @@ export const createCrudContext = <
       if (useCache && key) {
         // Capture the collection version BEFORE fetching so a write that lands
         // mid-flight can never be hidden by a late cache set (see `get` guard).
-        const colKey = cacheCollectionKey(client.databaseName, physical);
+        const colKey = cacheCollectionKey(client.databaseName, physical, opts.cacheNamespace);
         const versions = { [colKey]: opts.cache!.versionOf(colKey) };
         const hit = opts.cache!.get(key) as T | undefined;
         if (hit !== undefined) return Promise.resolve(hit);
@@ -377,7 +420,7 @@ export const createCrudContext = <
       // The collection VERSION is part of the dedup identity: a reader arriving
       // after a write invalidated the collection must start a FRESH load, never
       // join the pre-invalidation in-flight promise (mirrors HotCache's gen).
-      const colKey = cacheCollectionKey(client.databaseName, physical);
+      const colKey = cacheCollectionKey(client.databaseName, physical, opts.cacheNamespace);
       const gen = opts.cache !== undefined ? opts.cache.versionOf(colKey) : '';
       // `await` (not a bare `return`): a non-awaited return from this async
       // function unwinds the caller chain in Bun's stack capture, so the ignex
@@ -416,6 +459,7 @@ export const createCrudContext = <
     stampCreate,
     stampUpdate,
     stampReplace,
+    validateWrite,
     read,
     normalizeFindOptions,
   };

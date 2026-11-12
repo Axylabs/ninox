@@ -36,6 +36,9 @@ export interface BuildManagerDeps<TClients extends DbClientsDefinition> {
   dedupeReads: boolean;
   inFlight: InFlight;
   wrapMongoErrors: boolean;
+  debugQuery?: import('./trace-db-op.ts').DebugQuery | null;
+  allowNonTransactionalFallback?: boolean;
+  validateWrites?: boolean;
   drift?: DriftMode;
   /** Watch refs for cache-invalidation (physical names) — pushed to as managers build. */
   collectionRefs: CacheInvalidationRef[];
@@ -64,6 +67,8 @@ export type CollectionManager<
     ) => Promise<Array<T & JoinedFields<TClients, TDb, R>>>;
     /** Raw `db()` handle escape hatch. */
     client: Db;
+    /** Raw pooled client for host integrations (e.g. command monitoring). */
+    mongoClient: MongoClient;
     /** Reference to sibling managers (cross-DB). */
     db: Record<string, unknown>;
   };
@@ -77,6 +82,7 @@ export const buildManager = <
   dbKey: TDb,
   dbName: string,
   client: MongoClient,
+  cacheNamespace = '',
 ): CollectionManager<TClients, TDb> => {
   const { dbClients, config, logger, sharedCache, dedupeReads, inFlight, collectionRefs } = deps;
   const definition = dbClients[dbKey]!;
@@ -94,7 +100,11 @@ export const buildManager = <
     if (def.timestamps) timestamps[logical] = def.timestamps;
     // Cache-invalidation watchers track the PHYSICAL name (that's what cache
     // keys use), so writes to the raw collection invalidate the right reads.
-    collectionRefs.push({ db: handle, collection: baseResolveCollectionName(logical) });
+    collectionRefs.push({
+      db: handle,
+      collection: baseResolveCollectionName(logical),
+      namespace: cacheNamespace,
+    });
   }
   const getDefinition = (logical: string) => registry.get(logical);
 
@@ -112,12 +122,15 @@ export const buildManager = <
 
   const crud = makeCrudOps<TClients, TDb>(handle, dbName, logger, {
     resolveCollectionName,
+    cacheNamespace,
     wrapMongoErrors: deps.wrapMongoErrors,
+    ...(deps.debugQuery !== undefined ? { debugQuery: deps.debugQuery } : {}),
     ...(sharedCache !== undefined ? { cache: sharedCache } : {}),
     dedupeReads,
     inFlight,
     hooks,
     timestamps,
+    ...(deps.validateWrites !== undefined ? { validateWrites: deps.validateWrites } : {}),
     ...(deps.drift !== undefined ? { drift: deps.drift } : {}),
     ...(getDefinition !== undefined
       ? { getSchema: (logical: string) => getDefinition(logical)?.schema }
@@ -125,7 +138,9 @@ export const buildManager = <
   });
   const pagination = makePaginationOps<TClients, TDb>(handle, dbName, logger, {
     resolveCollectionName,
+    cacheNamespace,
     wrapMongoErrors: deps.wrapMongoErrors,
+    ...(deps.debugQuery !== undefined ? { debugQuery: deps.debugQuery } : {}),
     ...(deps.drift !== undefined ? { drift: deps.drift } : {}),
     ...(getDefinition !== undefined
       ? { getSchema: (logical: string) => getDefinition(logical)?.schema }
@@ -136,7 +151,9 @@ export const buildManager = <
   });
   const aggregation = makeAggregationOps<TClients, TDb>(handle, dbName, logger, {
     resolveCollectionName,
+    cacheNamespace,
     wrapMongoErrors: deps.wrapMongoErrors,
+    ...(deps.debugQuery !== undefined ? { debugQuery: deps.debugQuery } : {}),
     ...(sharedCache !== undefined ? { cache: sharedCache } : {}),
     dedupeReads,
     inFlight,
@@ -145,18 +162,16 @@ export const buildManager = <
   const transactionOps = makeTransactionOps(client, handle, logger, config, {
     migrationCollectionPhysical: resolveCollectionName('_migrations'),
     wrapMongoErrors: deps.wrapMongoErrors,
+    ...(deps.allowNonTransactionalFallback !== undefined
+      ? { allowNonTransactionalFallback: deps.allowNonTransactionalFallback }
+      : {}),
   });
   const populator = makePopulator({
-    findMany: async (logical, filter, options) => {
-      const physical = resolveCollectionName(logical);
-      return handle
-        .collection<Document>(physical)
-        .find(filter, {
-          ...(options?.projection !== undefined ? { projection: options.projection } : {}),
-          limit: options?.limit ?? 10_000,
-        })
-        .toArray();
-    },
+    findMany: async (logical, filter, options) =>
+      crud.findMany(logical as never, filter as never, {
+        ...options,
+        cache: options?.queryCache ?? false,
+      }) as Promise<Document[]>,
   });
   const populate = (async <const T extends Document, const R extends readonly RelationDef[]>(
     docs: T[],
@@ -175,6 +190,7 @@ export const buildManager = <
     ...transactionOps,
     populate,
     client: handle,
+    mongoClient: client,
     db: deps.db,
   };
 };

@@ -228,9 +228,27 @@ describe('validateDoc — field kinds', () => {
     expect(codes(schema, { obj: { a: 'x', b: 'y', c: 'z' } })).toEqual([['obj', 'constraint']]);
   });
 
-  test('raw $jsonSchema fields are not re-checked on the read side', () => {
-    const schema = s.object({ meta: s.jsonSchema({ bsonType: 'object' }) });
-    expect(issues(schema, { meta: { anything: true } })).toEqual([]);
+  test('raw $jsonSchema fields are validated on the read side', () => {
+    const schema = s.object({
+      meta: s.jsonSchema({
+        bsonType: 'object',
+        required: ['kind'],
+        additionalProperties: false,
+        properties: { kind: { enum: ['a', 'b'] } },
+      }),
+    });
+    expect(issues(schema, { meta: { kind: 'a' } })).toEqual([]);
+    expect(issues(schema, { meta: { kind: 'invalid' } }).map((issue) => issue.path)).toContain(
+      'meta.kind',
+    );
+    expect(issues(schema, { meta: {} }).map((issue) => issue.path)).toContain('meta.kind');
+  });
+
+  test('string formats are validated client-side and unsupported formats fail fast', () => {
+    const schema = s.object({ email: s.string({ format: 'email' }) });
+    expect(issues(schema, { email: 'valid@example.com' })).toEqual([]);
+    expect(issues(schema, { email: 'invalid' })).toHaveLength(1);
+    expect(() => s.string({ format: 'not-a-format' })).toThrow(/Unsupported string format/);
   });
 });
 
@@ -403,7 +421,7 @@ maybe('document drift — read-path hardening (real Mongo)', () => {
     expect(cap.warns.length).toBe(before);
   });
 
-  test('projected reads are skipped (partial docs would false-positive)', async () => {
+  test('projected reads ignore absent required fields without skipping present drift', async () => {
     // A throw-mode read with a projection must NOT throw on the missing required
     // fields — the projection returns only _id + email.
     const doc = await ctx.db.getOne('customers', { email: 'drift@example.com' } as never, {
@@ -411,6 +429,12 @@ maybe('document drift — read-path hardening (real Mongo)', () => {
       select: ['email'] as never,
     });
     expect(doc?.email).toBe('drift@example.com');
+    await expect(
+      ctx.db.getOne('customers', { email: 'drift@example.com' } as never, {
+        drift: true,
+        select: ['email', 'rogueField'] as never,
+      }),
+    ).rejects.toMatchObject({ code: 'SCHEMA_DRIFT' });
   });
 
   test('findMany + findActive also detect drift', async () => {
@@ -435,10 +459,9 @@ maybe('document drift — read-path hardening (real Mongo)', () => {
     expect(driftWarn).toBeDefined();
   });
 
-  test('paginateFlexible with a projection skips the drift check (lean MTS pages)', async () => {
-    // The same drifted doc, but paginated with a `projection` (the MTS
-    // id+mts list pattern): projected pages lack the schema's required fields
-    // and would false-positive — the drift check must be skipped entirely.
+  test('paginateFlexible projection ignores absent fields but validates returned values', async () => {
+    // Missing required fields are expected in a projection; no warning should
+    // be emitted unless a returned field itself is invalid.
     const before = cap.warns.length;
     const page = await ctx.db.paginateFlexible(
       'customers',

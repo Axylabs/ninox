@@ -1,16 +1,25 @@
-import type { ClientSession, Db, MongoClient, TransactionOptions } from 'mongodb';
-import { isTransactionUnsupportedError, mapMongoDriverError } from '../errors/index.ts';
+import { randomUUID } from 'node:crypto';
+import type {
+  ClientSession,
+  Db,
+  MongoClient,
+  TransactionOptions as MongoTransactionOptions,
+} from 'mongodb';
+import { InfraError, isTransactionUnsupportedError, mapMongoDriverError } from '../errors/index.ts';
 import type { LoggerLike } from '../utils/logger.ts';
+
+export interface TransactionOptions extends MongoTransactionOptions {
+  /** Explicitly permit non-atomic execution when transactions are unsupported. */
+  allowNonTransactionalFallback?: boolean;
+}
 
 export interface TransactionOpsOptions {
   migrationCollectionPhysical: string;
-  /** Map driver errors to typed DomainError/InfraError before rethrowing. */
   wrapMongoErrors?: boolean;
+  allowNonTransactionalFallback?: boolean;
 }
 
-/**
- * Transaction + idempotent-migration ops for one database handle.
- */
+/** Transaction + fenced idempotent-migration ops for one database handle. */
 export const makeTransactionOps = (
   client: MongoClient,
   handle: Db,
@@ -20,32 +29,35 @@ export const makeTransactionOps = (
 ) => {
   let warnedUnsupported = false;
   let journalIndexReady = false;
-
-  /** Migration claim lease in ms — mirrors `MongoMigrationRunnerOptions.leaseMs` default. */
   const MIGRATE_LEASE_MS = 120_000;
 
-  /**
-   * Run `fn(session)` inside a transaction. On standalone servers where
-   * transactions are unsupported (error code 20 / message sniff), falls back
-   * to running `fn(null)`. The fallback warning fires once per handle — not
-   * per call.
-   */
   const transaction = async <T>(
     fn: (session: ClientSession | null) => Promise<T>,
-    options?: TransactionOptions,
+    options: TransactionOptions = {},
   ): Promise<T> => {
+    const { allowNonTransactionalFallback, ...driverOptions } = options;
+    const allowFallback =
+      allowNonTransactionalFallback ?? opts.allowNonTransactionalFallback ?? false;
     const session = client.startSession();
     try {
-      return await session.withTransaction(async () => fn(session), options);
+      return await session.withTransaction(async () => fn(session), driverOptions);
     } catch (err) {
-      // Standalone (and deployments without retryable writes) can't run
-      // transactions; fall back to running `fn(null)` non-transactionally.
       if (isTransactionUnsupportedError(err)) {
+        if (!allowFallback) {
+          if (opts.wrapMongoErrors) {
+            throw new InfraError(
+              'TRANSACTIONS_UNSUPPORTED',
+              'MongoDB deployment does not support transactions; enable allowNonTransactionalFallback to run non-atomically',
+              { db: handle.databaseName, op: 'transaction' },
+            );
+          }
+          throw err;
+        }
         if (!warnedUnsupported) {
           warnedUnsupported = true;
           logger.warn?.(
             { error: err instanceof Error ? err.message : String(err) },
-            'transactions unsupported on this deployment, falling back to non-transactional',
+            'transactions unsupported; running explicitly requested non-transactional fallback',
           );
         }
         return fn(null);
@@ -55,28 +67,15 @@ export const makeTransactionOps = (
       }
       throw err;
     } finally {
-      await session.endSession();
+      await session.endSession().catch(() => {});
     }
   };
 
-  /**
-   * Idempotent migration claim — lease-based, mirroring `migrations/journal.ts`:
-   *
-   *   - A unique index on `name` (best-effort, created once per handle)
-   *     arbitrates concurrent fresh claims.
-   *   - An EXISTING row is only STOLEN when `status: 'running'` (or another
-   *     non-applied marker) AND its lease has EXPIRED (hard-crash recovery).
-   *     A LIVE claim held by another runner is never taken over — concurrent
-   *     `migrate(name)` calls can no longer execute `fn` twice.
-   *   - Legacy rows without `status` are treated as applied (never stolen).
-   *   - On failure the claim is deleted so the migration can be retried; if
-   *     the claim vanished mid-run, an `applied` row is restored instead of
-   *     silently allowing a future re-run.
-   */
   const migrate = async (
     name: string,
     fn: (session: ClientSession | null) => Promise<void>,
     filePath?: string,
+    options: { allowNonTransactionalFallback?: boolean } = {},
   ): Promise<void> => {
     const journal = handle.collection<{
       name: string;
@@ -84,16 +83,11 @@ export const makeTransactionOps = (
       status?: string;
       file?: string;
       expiresAt?: Date;
+      claimId?: string;
     }>(opts.migrationCollectionPhysical);
 
-    // createIndex can't run inside a transaction — do it before claiming.
-    // Best-effort: single-runner setups still work without uniqueness.
     if (!journalIndexReady) {
-      try {
-        await journal.createIndex({ name: 1 }, { unique: true });
-      } catch {
-        /* restricted permissions or conflicting index — claim still works single-runner */
-      }
+      await journal.createIndex({ name: 1 }, { unique: true });
       journalIndexReady = true;
     }
 
@@ -107,13 +101,12 @@ export const makeTransactionOps = (
       const sessionOpts = session ? { session } : {};
       const now = new Date();
       const expiresAt = new Date(Date.now() + MIGRATE_LEASE_MS);
+      const claimId = randomUUID();
 
-      // Step 1 — steal an EXPIRED non-applied claim (crashed runner). Live
-      // leases and applied/status-less (legacy) rows never match.
       const stole = (await journal.findOneAndUpdate(
         {
           name,
-          status: { $exists: true, $nin: ['applied'] },
+          status: { $exists: true, $nin: ['applied', 'rolling_back'] },
           $or: [
             { expiresAt: { $lt: now } },
             {
@@ -127,17 +120,17 @@ export const makeTransactionOps = (
             status: 'running',
             appliedAt: now,
             expiresAt,
+            claimId,
             ...(filePath ? { file: filePath } : {}),
           },
         },
         { returnDocument: 'before', ...sessionOpts },
       )) as Document | null;
       if (stole !== null) {
-        await runClaimed(session);
+        await runClaimed(session, claimId);
         return;
       }
 
-      // Step 2 — fresh claim; the unique index decides concurrent inserts.
       try {
         await journal.insertOne(
           {
@@ -145,13 +138,13 @@ export const makeTransactionOps = (
             appliedAt: now,
             status: 'running',
             expiresAt,
+            claimId,
             ...(filePath ? { file: filePath } : {}),
           },
           sessionOpts,
         );
       } catch (err) {
         if (!isDupKeyError(err)) throw err;
-        // Lost the race: applied (or legacy) → done; live claim → skip.
         const existing = (await journal.findOne(
           { name },
           { projection: { status: 1 }, ...sessionOpts },
@@ -164,20 +157,17 @@ export const makeTransactionOps = (
         }
         return;
       }
-      await runClaimed(session);
-    });
+      await runClaimed(session, claimId);
+    }, options);
 
-    async function runClaimed(session: ClientSession | null): Promise<void> {
+    async function runClaimed(session: ClientSession | null, claimId: string): Promise<void> {
       const sessionOpts = session ? { session } : {};
-      // Heartbeat extends the lease while a long `fn` runs — only possible in
-      // fallback (non-transactional) mode: inside a transaction the row is
-      // invisible/locked to outside updates until commit.
       const heartbeat =
         session === null
           ? setInterval(() => {
               void journal
                 .updateOne(
-                  { name, status: 'running' },
+                  { name, claimId, status: 'running' },
                   { $set: { expiresAt: new Date(Date.now() + MIGRATE_LEASE_MS) } },
                 )
                 .catch(() => {});
@@ -186,20 +176,16 @@ export const makeTransactionOps = (
       heartbeat?.unref?.();
       try {
         await fn(session);
-        const res = (await journal.updateOne(
-          { name, status: 'running' },
-          { $set: { status: 'applied' } },
+        const res = await journal.updateOne(
+          { name, claimId, status: 'running' },
+          { $set: { status: 'applied' }, $unset: { expiresAt: '', claimId: '' } },
           sessionOpts,
-        )) as unknown as Document & { matchedCount?: number };
-        // Zero matches = the running row vanished concurrently — restore an
-        // applied row so the migration is never silently re-run later.
-        if (res?.matchedCount === 0) {
-          await journal
-            .insertOne({ name, appliedAt: new Date(), status: 'applied' }, sessionOpts)
-            .catch(() => {});
+        );
+        if (res.matchedCount === 0) {
+          throw new Error(`Migration "${name}" lost its claim before it could be marked applied`);
         }
       } catch (err) {
-        await journal.deleteOne({ name }, sessionOpts).catch(() => {});
+        await journal.deleteOne({ name, claimId, status: 'running' }, sessionOpts).catch(() => {});
         throw err;
       } finally {
         if (heartbeat !== undefined) clearInterval(heartbeat);

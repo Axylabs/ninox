@@ -26,6 +26,8 @@ export interface CacheInvalidationRef {
   db: Db;
   /** PHYSICAL collection name — cache keys use it, so invalidation must too. */
   collection: string;
+  /** Stable deployment identity shared with the manager's cache keys. */
+  namespace?: string;
 }
 
 const SEP = '\u0000';
@@ -107,13 +109,13 @@ export class CacheInvalidator {
           // Reconnect after an outage: changes during the gap were missed, so
           // drop the collection's cache to force a re-fetch on the next read.
           this.cache.invalidateByCollection(
-            cacheCollectionKey(ref.db.databaseName, ref.collection),
+            cacheCollectionKey(ref.db.databaseName, ref.collection, ref.namespace),
           );
         }
         const iterator = stream[Symbol.asyncIterator]();
         for await (const _change of iterator) {
           this.cache.invalidateByCollection(
-            cacheCollectionKey(ref.db.databaseName, ref.collection),
+            cacheCollectionKey(ref.db.databaseName, ref.collection, ref.namespace),
           );
         }
       } catch (err) {

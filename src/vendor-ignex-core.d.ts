@@ -17,5 +17,5 @@ declare module '@ignex/core/debug' {
     sql: string,
     params: unknown,
     fn: () => T | Promise<T>,
-  ): Promise<T>;
+  ): T | Promise<T>;
 }

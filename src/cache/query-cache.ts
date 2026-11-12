@@ -4,12 +4,11 @@ import { LRU } from '../utils/lru.ts';
 export interface QueryCacheOptions {
   /** Max cached entries (default 500). */
   maxSize?: number;
-  /** Per-entry TTL in ms (default 0 = no expiry). */
+  /** Per-entry TTL in ms (default 30_000; set 0 explicitly for no expiry). */
   ttlMs?: number;
   /**
    * Clone results on every read so callers can't mutate the shared cache entry
-   * (default false — cloning has a per-read cost; treat cached results as
-   * read-only when disabled).
+   * (default true; set false only for read-only results where zero-copy matters).
    */
   clone?: boolean;
 }
@@ -51,16 +50,19 @@ const SEP = '\u0000';
 const NS_SEP = '\u0001';
 
 /**
- * Compose the "collection" part of a cache key, namespaced by the DATABASE name.
- * One service shares a single QueryCache + InFlight across every DB client; without
- * the namespace, same-named physical collections in different databases would
- * collide — a read on DB A could be served DB B's cached rows, and identical
+ * Compose the collection part of a cache key, namespaced by deployment and DB.
+ * One service shares a QueryCache + InFlight across every client; without these
+ * namespaces, same-named physical collections in different databases/clusters
+ * would collide — a read on DB A could be served DB B's cached rows, and identical
  * concurrent reads across DBs could coalesce into one driver call. Reads,
  * write-through invalidations, and change-stream invalidations MUST all use the
  * same namespace so they agree.
  */
-export const cacheCollectionKey = (dbName: string, physical: string): string =>
-  `${dbName}${NS_SEP}${physical}`;
+export const cacheCollectionKey = (
+  dbName: string,
+  physical: string,
+  clusterNamespace = '',
+): string => `${clusterNamespace}${NS_SEP}${dbName}${NS_SEP}${physical}`;
 
 /**
  * Read-through query cache with per-collection invalidation.
@@ -72,8 +74,8 @@ export const cacheCollectionKey = (dbName: string, physical: string): string =>
  * collections changes. Invalidation is WRITE-THROUGH only: the ORM drops a
  * collection's entries on every write it performs. Reads are NOT invalidated by
  * external writers (other processes, the raw `client` escape hatch, or direct
- * DB writes) — with `ttlMs: 0` (default) those reads stay stale indefinitely,
- * so multi-writer deployments should set `ttlMs` or use the change-stream aware
+ * DB writes). The default 30-second TTL bounds staleness; `ttlMs: 0` explicitly
+ * disables expiry, so multi-writer deployments can also use the change-stream aware
  * `createHotCache()`. Perf wins: cache hits perform zero driver round-trips.
  */
 export class QueryCache {
@@ -101,8 +103,8 @@ export class QueryCache {
       max: options.maxSize ?? 500,
       onEvict: (key) => this.unregisterKey(key),
     });
-    this.ttlMs = options.ttlMs ?? 0;
-    this.clone = options.clone ?? false;
+    this.ttlMs = options.ttlMs ?? 30_000;
+    this.clone = options.clone ?? true;
   }
 
   get size(): number {
@@ -195,6 +197,7 @@ export class QueryCache {
     this.sets++;
     const ttl = ttlMs ?? this.ttlMs;
     const expiresAt = ttl > 0 ? Date.now() + ttl : Infinity;
+    this.unregisterKey(key);
     this.lru.set(key, {
       value,
       expiresAt,

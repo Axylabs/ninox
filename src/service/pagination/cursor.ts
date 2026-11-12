@@ -44,9 +44,15 @@ export const makePaginateCursor = <
     config: CursorPaginationConfig,
   ): Promise<CursorPage<DocOf2<X>>> => {
     const sortKeys = Object.entries(config.sort);
+    const uniqueTiebreaker = config.uniqueTiebreaker ?? '_id';
     if (sortKeys.length === 0) {
       throw new BadRequest(
         'paginateCursor: `sort` is required (include a unique tiebreaker like `_id`)',
+      );
+    }
+    if (sortKeys.at(-1)?.[0] !== uniqueTiebreaker) {
+      throw new BadRequest(
+        `paginateCursor: the final sort key must be the unique tiebreaker "${uniqueTiebreaker}"`,
       );
     }
     if (config.before !== undefined && config.after !== undefined) {
@@ -119,10 +125,20 @@ export const makePaginateCursor = <
       'mongo.paginateCursor',
       page as unknown as Document[],
     );
-    const boundary = backwards ? rows[limit] : page[page.length - 1];
+    const boundary = backwards ? page[0] : page[page.length - 1];
     let nextCursor: string | null = null;
     if (hasMore && boundary !== undefined) {
-      const values = sortKeys.map(([f]) => (boundary as Document)[f]);
+      const values = sortKeys.map(([f]) =>
+        f
+          .split('.')
+          .reduce<unknown>(
+            (value, part) =>
+              value !== null && typeof value === 'object'
+                ? (value as Record<string, unknown>)[part]
+                : undefined,
+            boundary,
+          ),
+      );
       if (values.some((v) => v === undefined)) {
         // A boundary doc missing a sort field would encode as `null`, whose
         // keyset comparison ALSO matches missing fields — pages could loop or

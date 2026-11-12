@@ -19,13 +19,14 @@ export interface MigrationModule {
 /** Minimal manager surface the journaling uses (satisfied by `service.db.*Client`). */
 export interface JournalManager {
   insertOne(collection: string, doc: Document): Promise<unknown>;
-  findMany(collection: string, filter?: Document): Promise<Document[]>;
-  deleteOne(collection: string, filter: Document): Promise<unknown>;
-  deleteMany(collection: string, filter: Document): Promise<unknown>;
+  findMany(collection: string, filter?: Document, options?: any): Promise<Document[]>;
+  deleteOne(collection: string, filter: Document, options?: any): Promise<unknown>;
+  deleteMany(collection: string, filter: Document, options?: any): Promise<unknown>;
   updateOne(
     collection: string,
     filter: Document,
     update: Document,
+    options?: any,
   ): Promise<{ matchedCount?: number } | unknown>;
   findOneAndUpdate(
     collection: string,

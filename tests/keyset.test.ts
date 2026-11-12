@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { ObjectId } from 'mongodb';
+import { Decimal128, Long, ObjectId } from 'mongodb';
 import { BadRequest } from '../src/errors/index.ts';
 import { buildKeysetFilter, decodeCursor, encodeCursor } from '../src/shared/keyset.ts';
 import {
@@ -62,6 +62,18 @@ describe('keyset helpers (pure)', () => {
     expect(d2.values[2]).toBe(5);
     expect(d2.values[3]).toBeNull();
     expect(d2.values[4]).toBe(true);
+  });
+
+  test('cursor roundtrip preserves Decimal128 and Long sort values', () => {
+    const cursor = encodeCursor({
+      sort: { amount: 1, sequence: 1 },
+      values: [Decimal128.fromString('9.99'), Long.fromString('9007199254740993')],
+    });
+    const decoded = decodeCursor(cursor);
+    expect(decoded.values[0]).toBeInstanceOf(Decimal128);
+    expect(decoded.values[1]).toBeInstanceOf(Long);
+    expect(String(decoded.values[0])).toBe('9.99');
+    expect(String(decoded.values[1])).toBe('9007199254740993');
   });
 
   test('decodeCursor throws on malformed payload', () => {
