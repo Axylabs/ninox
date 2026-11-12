@@ -127,6 +127,7 @@ Backend-neutral, pure functions (no DB knowledge).
 | --- | --- | --- |
 | `createMongoService` | V | Build the service (managers, health, connections). |
 | `MongoService`, `MongoServiceConfig` | T | Service handle + config (`defaultDb`, `migrationDir`, `appName`, `logger`, `wrapMongoErrors`, `cache`, `cacheWatch`, `dedupeReads`, `perf`, `validateWrites`, `allowNonTransactionalFallback`, `drift`). |
+| `DebugQuery` | T | Signature of the injectable `debugQuery` host hook (config `debugQuery`, `traceDbOp` options): `(sql, params, fn) => T \| Promise<T>`. Mirrors `@ignex/core`'s debugbar hook exactly — it may return the operation's result synchronously when no request trace is active. |
 | `TransactionOptions` | T | Mongo transaction options plus explicit `allowNonTransactionalFallback` (default false). |
 | `CacheInvalidator` / `CacheInvalidationRef` | V/T | `cacheWatch: true` opens `$changeStream` watchers so external writes invalidate the shared cache (replica sets only). |
 | `CollectionManager` | T | Per-DB manager: CRUD + pagination + aggregation + schema (`createSchema`/`updateSchema`/`syncIndexes`) + transactions + `populate` + `client`. |
