@@ -8,5 +8,5 @@
     "bun run check:api",
     "bun run build"
   ],
-  "publish": { "strategy": "local", "manager": "npm" }
+  "publish": { "strategy": "ci", "manager": "npm" }
 }

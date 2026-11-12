@@ -8,6 +8,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+## [0.2.0] — 2026-11-13
+
+### Added
+
 - **Optional wire-level Mongo command monitoring and an injectable host tracer.**
   Client definitions accept `monitorCommands` (driver command events must be
   enabled before pools open), the toolkit takes a `debugQuery` hook for logical
@@ -56,6 +60,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
   streams need a replica set). The one-line warning carries the reason and the
   fix, instead of a single 200-character sentence that called every case
   "unavailable permanently".
+
+## [0.1.7] — 2026-09-23
+
+Entries below accumulated across the 0.1.4 – 0.1.7 releases (which shipped
+without CHANGELOG sections); consolidated here against the last release that
+carried them.
 
 ### Added
 

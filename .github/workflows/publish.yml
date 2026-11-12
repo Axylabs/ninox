@@ -1,0 +1,227 @@
+name: publish
+
+# Canonical release: verify the tag against the released version, run the
+# quality gate against a live Mongo, prove the packed tarball works in a fresh
+# Node consumer, then publish to npm with provenance via OIDC trusted
+# publishing (binding: Axylabs/ninox + publish.yml — configured on npmjs.com
+# with "Allow npm publish" + "Allow npm dist-tag" and no environment).
+#
+# Trigger with a version tag (`bun run release <bump> --push` produces the
+# release commit + tag; `.release.json` publish.strategy is `ci`, so the local
+# publish is skipped — pushing the tag IS the publish) or manually from the
+# Actions tab against an existing tag. The tag MUST match package.json
+# (verified below — a mismatch means the tag was pushed without the release
+# flow).
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (e.g. v0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+jobs:
+  # ── Quality gate (before spending on the publish) ────────────────
+  # The gate runs HERE rather than via `needs:` because the standards jobs live
+  # in ci.yml (a `needs:` cannot cross workflows). It runs the same list as
+  # `.release.json` verify (typecheck + lint + tests + check:api + build) plus
+  # the tarball consumer e2e from ci.yml's package job — a tag can never ship
+  # past a red gate. `prepublishOnly` re-runs typecheck + lint + build in the
+  # publish job as a second net.
+  verify:
+    name: Verify version + tests + package e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        env:
+          MONGO_INITDB_ROOT_USERNAME: admin
+          MONGO_INITDB_ROOT_PASSWORD: admin
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.runCommand({ ping: 1 }).ok ? 0 : 2)' --username admin --password admin --authenticationDatabase admin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Matches the default MONGO_URL used by every Mongo-backed suite.
+      MONGO_URL: mongodb://admin:admin@localhost:27017/
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ env.RELEASE_REF }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Tag matches the package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+            || { echo "::error::tag '$tag' is not vX.Y.Z"; exit 1; }
+          version="${tag#v}"
+          pkg=$(node -p "require('./package.json').version")
+          echo "tag=$version package=$pkg"
+          [[ "$version" == "$pkg" ]] || { echo "::error::tag $tag != package.json $pkg"; exit 1; }
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun test
+      - run: bun run check:api
+      - run: bun run build
+      - name: Pack and verify contents
+        run: npm pack --dry-run
+      - name: Install tarball in a fresh Node consumer
+        run: |
+          npm pack --pack-destination /tmp >/dev/null
+          TGZ=$(ls /tmp/ignex-ninox-*.tgz | head -1)
+          mkdir -p /tmp/consumer && cd /tmp/consumer
+          npm init -y >/dev/null 2>&1
+          npm i "$TGZ" typescript@^6.0.3 @types/node@^24 >/dev/null 2>&1
+          # Runtime check against the built dist (plain Node ESM)
+          cat > index.mjs <<'EOF'
+          import { createMongoService, s, toMongoValidator } from '@ignex/ninox';
+          import { stableHash } from '@ignex/ninox/utils';
+          const users = s.object({ _id: s.objectId(), email: s.string({ format: 'email' }) });
+          const v = toMongoValidator(users);
+          if (!v.$jsonSchema || v.$jsonSchema.bsonType !== 'object') process.exit(1);
+          const service = createMongoService({
+            primary: { name: 'ninox_package_e2e', dbUrl: process.env.MONGO_URL, collections: { users } },
+          });
+          await service.makeConnections();
+          const db = service.db.primaryClient;
+          try {
+            await db.client.dropDatabase();
+            await db.createSchema('users');
+            const { insertedId } = await db.insertOne('users', { email: 'node@example.com' });
+            const page = await db.paginateFlexible('users', {}, { limit: 10 });
+            if (page.totalCount !== 1) throw new Error('packaged pagination failed');
+            if ((await db.getOne('users', { _id: insertedId }))?.email !== 'node@example.com') {
+              throw new Error('packaged CRUD failed');
+            }
+          } finally {
+            await db.client.dropDatabase();
+            await service.closeConnections();
+          }
+          console.log('consumer-e2e-ok', stableHash(['x', 1]));
+          EOF
+          node index.mjs
+          # Typecheck against the published d.ts (NodeNext resolution)
+          cat > index.mts <<'EOF'
+          import { s, type InferDoc } from '@ignex/ninox';
+          import { stableHash } from '@ignex/ninox/utils';
+          const x = s.object({ _id: s.objectId(), email: s.string() }, { name: 'users' });
+          type User = InferDoc<typeof x>;
+          const h = stableHash(['a', 1]);
+          export type { User };
+          export { h };
+          EOF
+          cat > tsconfig.json <<'EOF'
+          {
+            "compilerOptions": {
+              "module": "NodeNext",
+              "moduleResolution": "NodeNext",
+              "strict": true,
+              "noEmit": true,
+              "skipLibCheck": true,
+              "types": ["node"]
+            },
+            "include": ["index.mts"]
+          }
+          EOF
+          npx tsc --noEmit
+
+  # ── npm publish (OIDC trusted publishing) ────────────────────────
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    needs: [verify]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # npm Trusted Publishing exchanges this OIDC token for a short-lived
+      # publish credential; `--provenance` needs it too.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ env.RELEASE_REF }}
+      # Publishing rides on OIDC trusted publishing (the trusted-publisher
+      # binding for this repo + publish.yml is configured on the npmjs
+      # package): npm exchanges the job's OIDC token for a short-lived publish
+      # credential — no long-lived secret to expire or leak, and the account's
+      # 2FA never demands an OTP in CI. There is no NPM_TOKEN secret wired in
+      # this repo: OIDC is the only publish path (the previous releases were
+      # manual local publishes; `.release.json` publish.strategy is now `ci`).
+      # History (castrum, 2026-11-08/09): npm >= 12.2.2 prefers OIDC and E404s
+      # when the binding is missing — verify releases on the registry, never by
+      # this job's conclusion (with `npm stage publish`-only bindings npm STAGES
+      # the version instead of failing: the step exits 0 and logs
+      # `+ @ignex/ninox@<version>`, but nothing goes live until maintainer
+      # approval).
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # npm is PINNED, never `latest`: the 12.2.1 → 12.2.2 drift silently
+      # flipped publish auth to prefer OIDC and broke castrum's first release.
+      # Bump this deliberately, like BUN_VERSION in ignex's CI.
+      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.2)
+        run: |
+          npm install -g npm@12.2.2
+          node -e 'const v=require("node:child_process").execSync("npm --version").toString().trim().split(".").map(Number); const old=v[0]<11||(v[0]===11&&(v[1]<5||(v[1]===5&&v[2]<2))); if(old){console.error(`::error::npm ${v.join(".")} is too old for OIDC trusted publishing (need >= 11.5.2)`);process.exit(1)} console.log(`npm ${v.join(".")} supports trusted publishing`)'
+      # prepublishOnly (`bun run typecheck && bun run lint && bun run build`)
+      # needs bun + the workspace installed.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - run: bun install --frozen-lockfile
+      # Diagnostics for the OIDC path: if publishing fails, the log shows
+      # whether the runner exposed an id-token (required for the trusted-
+      # publishing exchange) and whether an .npmrc auth entry exists. The
+      # token is never printed.
+      - name: Report the OIDC environment
+        run: |
+          echo "id-token request url   : ${ACTIONS_ID_TOKEN_REQUEST_URL:+present}"
+          echo "id-token request token : ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+present}"
+          echo "expected claim         : ${{ github.repository }} / .github/workflows/publish.yml @ ${{ github.ref }}"
+          if [ -f "$HOME/.npmrc" ]; then
+            echo "~/.npmrc present (token fallback wired):"
+            sed 's/_authToken=.*/_authToken=<redacted>/' "$HOME/.npmrc"
+          else
+            echo "no ~/.npmrc"
+          fi
+      # npm only exchanges the job's OIDC token when NO other credential is
+      # reachable: a NODE_AUTH_TOKEN in the env (which setup-node interpolates
+      # into .npmrc) makes npm use the token and never try OIDC. So the publish
+      # runs against a clean userconfig with any token scrubbed out of the
+      # environment (the castrum release lane proved this inversion).
+      - name: Publish to npm (OIDC trusted publishing)
+        run: |
+          set -uo pipefail
+          version="${RELEASE_TAG#v}"
+          printf 'registry=https://registry.npmjs.org/\n' > "$RUNNER_TEMP/oidc.npmrc"
+          if env -u NODE_AUTH_TOKEN \
+               npm publish --access public --provenance \
+               --userconfig "$RUNNER_TEMP/oidc.npmrc"; then
+            echo "published @ignex/ninox@$version via OIDC trusted publishing"
+          else
+            echo "::error::OIDC trusted publish failed — check the binding on npmjs.com (Axylabs/ninox + publish.yml, no environment) and the diagnostics above. Verify on the registry: npm may have STAGED the version instead of failing."
+            exit 1
+          fi
