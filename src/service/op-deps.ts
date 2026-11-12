@@ -26,7 +26,10 @@ export const makeOpDeps = <TC>(
   debugQuery?: DebugQuery | null,
 ): OpDeps<TC> => {
   const trace = <T>(meta: DbOpMeta, fn: () => T | Promise<T>): Promise<T> =>
-    traceDbOp(logger, meta, fn, { wrapMongoErrors, ...(debugQuery !== undefined ? { debugQuery } : {}) });
+    traceDbOp(logger, meta, fn, {
+      wrapMongoErrors,
+      ...(debugQuery !== undefined ? { debugQuery } : {}),
+    });
   const meta = (collection: TC, op: string, params?: unknown): DbOpMeta => ({
     collection: String(collection),
     physicalCollection: resolve(String(collection)),

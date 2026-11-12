@@ -165,5 +165,5 @@ export type { ResolvedServiceConfig } from './config.ts';
 export { type MongoServiceConfig, resolveCache } from './config.ts';
 export { createHealth, type DbHealthResult, type HealthReport } from './health.ts';
 export { type BuildManagerDeps, buildManager, type CollectionManager } from './manager.ts';
-export type { TransactionOptions } from './transaction.ts';
 export type { DebugQuery } from './trace-db-op.ts';
+export type { TransactionOptions } from './transaction.ts';
